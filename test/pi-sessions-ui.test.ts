@@ -1,6 +1,15 @@
 // Continuing a Pi session from the terminal, in a real browser at phone size where this machine has Chromium: the owner
 // finds it from the New session sheet, looks at it, and continues it; a guest has no way in.
-import { type App, cleanUp, openApp, root, scriptedModel, until, work } from "./helpers.ts";
+import {
+    type App,
+    cleanUp,
+    newSession,
+    openApp,
+    root,
+    scriptedModel,
+    until,
+    work,
+} from "./helpers.ts";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
@@ -125,6 +134,118 @@ after(async () => {
     server?.close();
     await app?.close();
     cleanUp();
+});
+
+test("New session remembers Hide/Browse and keeps starred folders on top", real, async () => {
+    await newSession(app);
+    await newSessionSheet();
+    await see(`return JSON.stringify(!!document.querySelector('.dir-list'))`, "folder listing");
+    await page.click({ selector: ".folder-path button" });
+    await newSessionSheet();
+    assert.equal(
+        await inPage<boolean>(`return JSON.stringify(!document.querySelector('.dir-list'))`),
+        true,
+    );
+    await page.click({ label: "Star folder" });
+    await see(
+        `return JSON.stringify(!!document.querySelector('[aria-label="Unstar folder"]'))`,
+        "starred folder",
+    );
+    await newSessionSheet();
+    assert.equal(
+        await inPage<boolean>(`return JSON.stringify(
+        document.querySelector('.sheet-body').firstElementChild.classList.contains('folder-favorites')
+    )`),
+        true,
+        "favorites appear above the path input",
+    );
+    assert.equal(
+        await inPage<number>(
+            `return JSON.stringify(document.querySelectorAll('.folder-favorites .folder-shortcut').length)`,
+        ),
+        1,
+    );
+    assert.equal(
+        await inPage<boolean>(`return JSON.stringify(
+        document.querySelector('.folder-select').firstElementChild.classList.contains('folder-shortcut') &&
+        !document.querySelector('.folder-favorites kbd') &&
+        !document.querySelector('.folder-path .folder-star')
+    )`),
+        true,
+        "shortcut is on the left without keycaps; no star by the input",
+    );
+    await page.evaluate(`
+        const { actions } = await import('/store.js');
+        const original = actions.createSession;
+        window.folderStarts = [];
+        actions.createSession = async (path, options) => {
+            window.folderStarts.push({ path, options });
+            await new Promise(resolve => setTimeout(resolve, 100));
+            throw new Error('test start');
+        };
+        window.restoreFolderStart = () => { actions.createSession = original; };
+        const { APPLE } = await import('/ui.js');
+        for (let i = 0; i < 2; i++) {
+            dispatchEvent(new KeyboardEvent('keydown', {
+                key: '1', code: 'Digit1', metaKey: APPLE, ctrlKey: !APPLE, cancelable: true
+            }));
+        }
+    `);
+    await see(`return JSON.stringify(window.folderStarts.length === 1)`, "one shortcut start");
+    await settled();
+    assert.equal(await inPage<string>(`return JSON.stringify(window.folderStarts[0].path)`), work);
+    await page.evaluate(`
+        (await import('/store.js')).openSheet({ type: 'shortcuts' });
+        const { APPLE } = await import('/ui.js');
+        dispatchEvent(new KeyboardEvent('keydown', {
+            key: '1', code: 'Digit1', metaKey: APPLE, ctrlKey: !APPLE, cancelable: true
+        }));
+    `);
+    assert.equal(
+        await inPage<number>(`return JSON.stringify(window.folderStarts.length)`),
+        1,
+        "no starts outside New session",
+    );
+    await page.evaluate(`window.restoreFolderStart()`);
+    await newSessionSheet();
+    assert.equal(
+        await inPage<boolean>(
+            `return JSON.stringify(document.documentElement.scrollWidth <= innerWidth)`,
+        ),
+        true,
+        "favorites fit a phone",
+    );
+    await page.click({ label: "Unstar folder" });
+    await newSessionSheet();
+    assert.equal(
+        await inPage<boolean>(
+            `return JSON.stringify(!document.querySelector('.folder-favorites'))`,
+        ),
+        true,
+    );
+    await page.click({ selector: ".folder-path button" });
+    await newSessionSheet();
+    await see(
+        `return JSON.stringify(!!document.querySelector('.dir-list'))`,
+        "Browse remembered too",
+    );
+    await page.click({ label: "Star folder" });
+    await settled();
+    await page.evaluate(`
+        const { APPLE } = await import('/ui.js');
+        dispatchEvent(new KeyboardEvent('keydown', {
+            key: '1', code: 'Digit1', metaKey: APPLE, ctrlKey: !APPLE, cancelable: true
+        }));
+    `);
+    await see(
+        `
+        const { store } = await import('/store.js');
+        return JSON.stringify(!store.state.sheet && store.state.view.agent?.cwd === ${JSON.stringify(work)});
+    `,
+        "shortcut creates and opens a real session in the starred folder",
+    );
+    await newSessionSheet();
+    await page.click({ label: "Unstar folder" });
 });
 
 test(

@@ -4380,6 +4380,59 @@ button.chip:hover {
     flex: 1;
 }
 
+.folder-path input {
+    min-width: 0;
+}
+
+.folder-option {
+    padding: 0;
+    gap: 0;
+}
+
+.folder-select {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 0.6rem;
+    flex: 1;
+    min-width: 0;
+    padding: 0.6rem 0.7rem;
+    text-align: left;
+}
+
+.folder-shortcut {
+    flex-shrink: 0;
+    padding: 0.1rem 0.3rem;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    font-size: 1.25rem;
+    color: var(--muted);
+}
+
+.folder-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.folder-star {
+    flex-shrink: 0;
+    width: 44px;
+    min-height: 44px;
+    padding: 0;
+    font-size: 1.6rem;
+    line-height: 1;
+    color: var(--muted);
+    background: none;
+    border: 0;
+}
+
+.folder-star:hover,
+.folder-star[aria-pressed="true"] {
+    color: var(--accent);
+}
+
 .button {
     display: inline-flex;
     align-items: center;

@@ -2,8 +2,24 @@
 // own.
 import { useEffect, useRef, useState } from "preact/hooks";
 import { actions, api, attempt, closeSheet, navigate, notify, openSheet, store } from "../store.js";
-import { html, Icon, item, Sheet, shortPath } from "../ui.js";
+import { APPLE, html, Icon, item, Sheet, shortPath } from "../ui.js";
 import { piSessionsAvailable } from "./pi-sessions.js";
+
+const BROWSE_KEY = "pocket.folder.browse";
+const FAVORITES_KEY = "pocket.folder.favorites";
+
+/** Saved folders belong to this browser, like pinned sessions. Ignore malformed saved values. */
+function savedFavorites() {
+    try {
+        const value = JSON.parse(localStorage.getItem(FAVORITES_KEY) ?? "[]");
+
+        return Array.isArray(value)
+            ? [...new Set(value.filter((path) => typeof path === "string" && path.startsWith("/")))]
+            : [];
+    } catch {
+        return [];
+    }
+}
 
 /** A folder's path with a name added: `/a` and `b` make `/a/b`, `/` and `b` make `/b`. */
 const joined = (folder, name) => `${folder.replace(/\/+$/, "")}/${name.replace(/^\/+/, "")}`;
@@ -65,7 +81,9 @@ export function CwdSheet({ mode }) {
     const [path, setPath] = useState(initial ?? "~");
     const [listing, setListing] = useState(null);
     const [hidden, setHidden] = useState(false);
-    const [browse, setBrowse] = useState(true);
+    const [browse, setBrowse] = useState(() => localStorage.getItem(BROWSE_KEY) !== "false");
+    const [favorites, setFavorites] = useState(savedFavorites);
+    const starting = useRef(false);
     const [worktree, setWorktree] = useState(false);
     // Whether a folder is being named, to make in the one shown; and a path typed that is not there yet.
     const [naming, setNaming] = useState(false);
@@ -96,6 +114,12 @@ export function CwdSheet({ mode }) {
 
     /** Start the session in a folder (or move this one there), making the folder first when it is not there yet. */
     const use = async (target) => {
+        if (starting.current) {
+            return;
+        }
+
+        starting.current = true;
+
         try {
             if (missing === target) {
                 await api("fs", { path: target });
@@ -116,8 +140,64 @@ export function CwdSheet({ mode }) {
             } else {
                 notify("error", error.message);
             }
+        } finally {
+            starting.current = false;
         }
     };
+
+    const toggleFavorite = (target) => {
+        const next = favorites.includes(target)
+            ? favorites.filter((folder) => folder !== target)
+            : [...favorites, target];
+
+        localStorage.setItem(FAVORITES_KEY, JSON.stringify(next));
+        setFavorites(next);
+    };
+
+    const star = (target) => html`<button
+        class="folder-star"
+        aria-label=${favorites.includes(target) ? "Unstar folder" : "Star folder"}
+        aria-pressed=${favorites.includes(target)}
+        title=${target}
+        onClick=${() => toggleFavorite(target)}
+    >
+        ${favorites.includes(target) ? "★" : "☆"}
+    </button>`;
+
+    // Capture before app-wide shortcuts; only the visible New session sheet owns these keys.
+    useEffect(() => {
+        const shortcut = (event) => {
+            const sheet = store.state.sheet;
+            const mod = APPLE ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
+            const digit = /^Digit([1-9])$/.exec(event.code);
+            const target = digit && favorites[Number(digit[1]) - 1];
+
+            if (
+                mode !== "new" ||
+                sheet?.type !== "cwd" ||
+                sheet.mode !== "new" ||
+                store.state.launcher ||
+                event.isComposing ||
+                event.altKey ||
+                event.shiftKey ||
+                !mod ||
+                !target
+            ) {
+                return;
+            }
+
+            event.preventDefault();
+            event.stopImmediatePropagation();
+
+            if (!event.repeat) {
+                use(target);
+            }
+        };
+
+        addEventListener("keydown", shortcut, true);
+
+        return () => removeEventListener("keydown", shortcut, true);
+    }, [mode, favorites, worktree, missing]);
 
     /** Make a folder, then show it, chosen: Use is the next tap. */
     const make = (target) =>
@@ -134,9 +214,26 @@ export function CwdSheet({ mode }) {
         title=${mode === "change" ? "Working directory" : "New session"}
         onClose=${closeSheet}
     >
-        <div class="row">
+        ${
+            mode === "new" &&
+            favorites.length > 0 &&
+            html`<div class="folder-favorites group">
+                <div class="group-title">Favorites</div>
+                ${favorites.map(
+                    (folder, index) => html`<div class="list-item folder-option">
+                        <button class="folder-select" onClick=${() => use(folder)}>
+                            ${index < 9 && html`<span class="folder-shortcut">${APPLE ? "⌘" : "Ctrl"} ${index + 1}</span>`}
+                            <span class="mono folder-name">${shortPath(folder, home)}</span>
+                        </button>
+                        ${star(folder)}
+                    </div>`,
+                )}
+            </div>`
+        }
+        <div class="row folder-path">
             <input
                 class="mono"
+                aria-label="Working folder"
                 value=${path}
                 onInput=${(event) => {
                     setPath(event.currentTarget.value);
@@ -146,7 +243,16 @@ export function CwdSheet({ mode }) {
             />
             <button
                 class="button"
-                onClick=${() => (browse ? setBrowse(false) : (setBrowse(true), load(path)))}
+                onClick=${() => {
+                    const next = !browse;
+
+                    localStorage.setItem(BROWSE_KEY, String(next));
+                    setBrowse(next);
+
+                    if (next) {
+                        load(path);
+                    }
+                }}
             >
                 ${browse ? "Hide" : "Browse"}
             </button>
@@ -227,12 +333,16 @@ export function CwdSheet({ mode }) {
             listing?.recent?.length > 0 &&
             html`<div class="group">
                 <div class="group-title">Recent</div>
-                ${listing.recent.map(
-                    (dir) =>
-                        html`<button class="list-item" onClick=${() => use(dir)}>
-                            <span class="mono">${shortPath(dir, listing.home)}</span>
-                        </button>`,
-                )}
+                ${listing.recent
+                    .filter((dir) => mode !== "new" || !favorites.includes(dir))
+                    .map(
+                        (dir) => html`<div class="list-item folder-option">
+                        <button class="folder-select" onClick=${() => use(dir)}>
+                            <span class="mono folder-name">${shortPath(dir, listing.home)}</span>
+                        </button>
+                        ${mode === "new" && star(dir)}
+                    </div>`,
+                    )}
             </div>`
         }
     <//>`;

@@ -7,6 +7,7 @@ const SHORTCUTS = [
     ["Alt 1", "… Alt 9: jump to a session, like a workspace"],
     ["Alt ↑", "Alt ↓: previous or next session"],
     ["Alt N", "New session"],
+    ["Mod 1", "… Mod 9: in New session, start in a favorite folder"],
     ["Alt B", "Open or close the browser"],
     ["Alt E", "Open or close the Files tile: the folder's files, and what changed"],
     ["Alt A", "Open or close PiP, your assistant"],
