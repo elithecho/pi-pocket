@@ -6,20 +6,6 @@ import { APPLE, html, Icon, item, Sheet, shortPath } from "../ui.js";
 import { piSessionsAvailable } from "./pi-sessions.js";
 
 const BROWSE_KEY = "pocket.folder.browse";
-const FAVORITES_KEY = "pocket.folder.favorites";
-
-/** Saved folders belong to this browser, like pinned sessions. Ignore malformed saved values. */
-function savedFavorites() {
-    try {
-        const value = JSON.parse(localStorage.getItem(FAVORITES_KEY) ?? "[]");
-
-        return Array.isArray(value)
-            ? [...new Set(value.filter((path) => typeof path === "string" && path.startsWith("/")))]
-            : [];
-    } catch {
-        return [];
-    }
-}
 
 /** A folder's path with a name added: `/a` and `b` make `/a/b`, `/` and `b` make `/b`. */
 const joined = (folder, name) => `${folder.replace(/\/+$/, "")}/${name.replace(/^\/+/, "")}`;
@@ -75,14 +61,14 @@ function NewFolder({ folder, onMake, onCancel }) {
 }
 
 export function CwdSheet({ mode }) {
-    const { view, server } = store.state;
+    const { view, server, folderFavorites: favorites } = store.state;
     const initial =
         mode === "change" ? (view.agent?.cwd ?? server?.defaultCwd) : (server?.defaultCwd ?? "~");
     const [path, setPath] = useState(initial ?? "~");
     const [listing, setListing] = useState(null);
     const [hidden, setHidden] = useState(false);
     const [browse, setBrowse] = useState(() => localStorage.getItem(BROWSE_KEY) !== "false");
-    const [favorites, setFavorites] = useState(savedFavorites);
+    const [saving, setSaving] = useState(false);
     const starting = useRef(false);
     const [worktree, setWorktree] = useState(false);
     // Whether a folder is being named, to make in the one shown; and a path typed that is not there yet.
@@ -145,19 +131,25 @@ export function CwdSheet({ mode }) {
         }
     };
 
-    const toggleFavorite = (target) => {
-        const next = favorites.includes(target)
-            ? favorites.filter((folder) => folder !== target)
-            : [...favorites, target];
+    const toggleFavorite = (target) =>
+        attempt(async () => {
+            setSaving(true);
 
-        localStorage.setItem(FAVORITES_KEY, JSON.stringify(next));
-        setFavorites(next);
-    };
+            try {
+                await api("folder-favorites", {
+                    path: target,
+                    starred: !favorites.includes(target),
+                });
+            } finally {
+                setSaving(false);
+            }
+        });
 
     const star = (target) => html`<button
         class="folder-star"
         aria-label=${favorites.includes(target) ? "Unstar folder" : "Star folder"}
         aria-pressed=${favorites.includes(target)}
+        disabled=${saving}
         title=${target}
         onClick=${() => toggleFavorite(target)}
     >

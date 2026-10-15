@@ -167,6 +167,16 @@ export function createApi(options: HttpOptions, auth: Auth) {
             return json(response, 200, { ok: true });
         }
 
+        if (first === "folder-favorites" && second === undefined && method === "GET") {
+            return json(response, 200, await app.folderFavorites.list(user));
+        }
+
+        if (first === "folder-favorites" && second === undefined && method === "POST") {
+            await app.folderFavorites.set(user, await readJson(request));
+
+            return json(response, 200, { ok: true });
+        }
+
         if (first === "logout" && method === "POST") {
             clearAuthCookie(response);
 

@@ -55,6 +55,7 @@ import {
     ChatDoc,
     type ChatMessage,
     DecisionsDoc,
+    FolderFavoritesDoc,
     MemoryDoc,
     type SessionMeta,
     SessionsDoc,
@@ -63,6 +64,7 @@ import {
     TurnsDoc,
 } from "./docs.ts";
 import { describe, HttpError } from "./errors.ts";
+import { FolderFavorites } from "./folder-favorites.ts";
 import { Goals } from "./goals.ts";
 import { type ApprovalRequest, Approvals, type PocketHost } from "./host.ts";
 import { type GuardStatus, LancetGuard } from "./lancet.ts";
@@ -270,6 +272,8 @@ export class PocketApp {
     readonly hooks = new Hooks(this);
     /** Lessons Pi keeps across sessions, for a project or everywhere. */
     readonly memory = new Memory(this);
+    /** Each person's favorite working folders, shared by their devices. */
+    readonly folderFavorites = new FolderFavorites(this);
     /** Each conversation's browser page, which Pi and the people in the conversation share. */
     readonly browsers: Browsers;
     readonly #clients = new Set<Client>();
@@ -667,6 +671,10 @@ export class PocketApp {
                     () => {},
                 );
             }
+        } else if (kind === FolderFavoritesDoc.definition.kind) {
+            this.folderFavorites.committed(
+                change.value as { users: Record<string, string[]> } | null,
+            );
         } else if (kind === MemoryDoc.definition.kind) {
             this.memory.committed();
         } else if (ROOM_DOCS.has(kind) && id !== undefined) {
@@ -1544,6 +1552,8 @@ export class PocketApp {
                 // Tokens of context above which PiP compacts itself once idle; 0: only as sessions do.
                 pipCompactAt: this.pipCompaction.compactAt,
             },
+            // Read after the guard's wait, so a connecting device does not replace a live update with an older list.
+            folderFavorites: await this.folderFavorites.list(user),
         };
     }
 

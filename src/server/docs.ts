@@ -45,6 +45,14 @@ export const SessionsDoc = defineDoc<{ items: Record<string, SessionMeta> }>({
     initial: () => ({ items: {} }),
 });
 
+/** Favorite working folders in shortcut order, private to each person and shared by their devices. */
+export const FolderFavoritesDoc = defineDoc<{ users: Record<string, string[]> }>({
+    kind: "pocket.folder-favorites",
+    version: 1,
+    scope: "session",
+    initial: () => ({ users: {} }),
+});
+
 /**
  * Who wrote each user message, by entry id. `requesters` holds, for a message no person wrote (a parent's message to
  * its subagent), whose work it is: the person the parent worked for then. `requests` is unused.

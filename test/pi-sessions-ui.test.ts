@@ -249,6 +249,116 @@ test("New session remembers Hide/Browse and keeps starred folders on top", real,
 });
 
 test(
+    "favorites sync between isolated browser profiles, but Hide/Browse stays local",
+    real,
+    async () => {
+        const other = await browsers.open(3);
+
+        try {
+            await newSessionSheet();
+            await other.navigate(
+                `${base}/login?token=${encodeURIComponent(app.config.ownerToken)}`,
+            );
+            await see(
+                `return JSON.stringify((await import('/store.js')).store.state.me?.role === 'owner')`,
+                "the second device signed in",
+                other,
+            );
+            await other.evaluate(
+                `localStorage.setItem('pocket.folder.favorites', '["/old-browser-only"]')`,
+            );
+            await newSessionSheet(other);
+            assert.equal(
+                await inPage<boolean>(
+                    `return JSON.stringify(!document.querySelector('.folder-favorites'))`,
+                    other,
+                ),
+                true,
+                "old browser favorites are not migrated",
+            );
+            await page.click({ label: "Star folder" });
+            await see(
+                `return JSON.stringify(!!document.querySelector('.folder-favorites'))`,
+                "favorite on first device",
+            );
+            await see(
+                `return JSON.stringify(!!document.querySelector('.folder-favorites'))`,
+                "favorite arrives live on second device",
+                other,
+            );
+            assert.deepEqual(
+                await inPage<string[]>(
+                    `return JSON.stringify((await import('/store.js')).store.state.folderFavorites)`,
+                    other,
+                ),
+                [work],
+            );
+            await other.evaluate(`localStorage.clear()`);
+            await newSessionSheet(other);
+            await see(
+                `return JSON.stringify(!!document.querySelector('.folder-favorites'))`,
+                "favorite survives clearing browser storage",
+                other,
+            );
+            await page.click({ selector: ".folder-path button" });
+            await see(
+                `return JSON.stringify(!document.querySelector('.dir-list'))`,
+                "first device hides folders",
+            );
+            assert.equal(
+                await inPage<boolean>(
+                    `return JSON.stringify(!!document.querySelector('.dir-list'))`,
+                    other,
+                ),
+                true,
+                "Hide/Browse is not synced",
+            );
+            await other.click({ label: "Unstar folder" });
+            await see(
+                `return JSON.stringify(!document.querySelector('.folder-favorites'))`,
+                "removal arrives on first device",
+            );
+            await see(
+                `return JSON.stringify(!document.querySelector('.folder-favorites'))`,
+                "removed on second device",
+                other,
+            );
+
+            // A failed write must not change the visible list, and its star must become usable for a retry.
+            await other.evaluate(`
+            window.originalFetch = window.fetch;
+            window.fetch = (url, init) => url === '/api/folder-favorites' && init?.method === 'POST'
+                ? Promise.reject(new Error('Favorite save failed')) : window.originalFetch(url, init);
+        `);
+            await other.click({ label: "Star folder" });
+            await shows("Favorite save failed", other);
+            assert.deepEqual(
+                await inPage<string[]>(
+                    `return JSON.stringify((await import('/store.js')).store.state.folderFavorites)`,
+                    other,
+                ),
+                [],
+            );
+            await other.evaluate(`window.fetch = window.originalFetch`);
+            await other.click({ label: "Star folder" });
+            await see(
+                `return JSON.stringify(!!document.querySelector('.folder-favorites'))`,
+                "retry saved the favorite",
+                other,
+            );
+            await settled();
+            await other.click({ label: "Unstar folder" });
+            await see(
+                `return JSON.stringify(!document.querySelector('.folder-favorites'))`,
+                "cleanup synced",
+            );
+        } finally {
+            await browsers.close(3);
+        }
+    },
+);
+
+test(
     "the owner finds a Pi session from New session, looks at it, and continues it here",
     real,
     async () => {

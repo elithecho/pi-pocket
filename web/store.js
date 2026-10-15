@@ -71,6 +71,8 @@ export const store = {
         guard: null,
         server: null,
         sessions: [],
+        /** This person's favorite folders, in shortcut order, sent by the server to every signed-in device. */
+        folderFavorites: [],
         /** False until the server's first session list arrives: an empty list until then means "not here yet". */
         sessionsLoaded: false,
         /** Sessions on their way into the archive (true) or out of it (false), by id, until the list catches up (`sessions.js`). */
@@ -451,6 +453,7 @@ const handlers = {
         store.set({
             me: data.user,
             users: data.users,
+            folderFavorites: data.folderFavorites ?? [],
             models: data.models,
             guard: data.guard,
             server: data.server,
@@ -463,6 +466,7 @@ const handlers = {
             sessionsLoaded: true,
             moving: stillMoving(state.moving, sessions),
         })),
+    "folder-favorites": (folderFavorites) => store.set({ folderFavorites }),
     models: (models) => store.set({ models }),
     // Every subagent in every session, while this tab shows the subagents board (`subagents-board.js`).
     subagents: (agents) => store.state.board && store.set({ boardAgents: agents }),
