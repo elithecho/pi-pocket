@@ -25,7 +25,7 @@ Some state lives in this process alone, and a restart forgets it. For example:
 
 - `commands`, `collab`, `alerts`, `providers`, `schedules`, `goals`, `shell`, `spend`
 - `workspace`, `transcripts`, `attribution`, `piSessions`, `pip`, `watches`, `hooks`, `memory`
-- `browsers`
+- `browsers`, `linkedChats`
 
 **What stays on `PocketApp`** (the parts call these rather than keeping copies):
 
@@ -43,6 +43,44 @@ Extensions never see `PocketApp`. They get `PocketHost` (`host.ts`), whose funct
 ## Favorite folders
 
 `FolderFavoritesDoc` (`pocket.folder-favorites`) stores each person's ordered favorite working folders in SQLite. `folder-favorites.ts` reads and changes only the signed-in person's list; explicit star/unstar operations run inside one harness transaction, so concurrent devices do not overwrite unrelated changes. The commit coordinator sends each connected client only its person's list as a `folder-favorites` event. `hello.folderFavorites` supplies the initial list and refreshes it on reconnect. The folder picker renders committed server state; a failed save leaves its list unchanged. Hide/Browse remains in browser storage. Earlier browser-local favorite lists are not read or imported.
+
+## Agent Teams
+
+`linked-chats.ts` starts ownerless conversations with ordinary `SessionsDoc` entries. The independent
+`extensions/agent-teams.ts` module (**Agent Teams**) provides its tool and prompt through
+`PocketHost.linkedChats`; **Subagents** keeps only nested agents and their report tasks. Either module
+can be disabled without affecting the other. Disabling Agent Teams does not delete its ordinary
+chats or their links. Nested agents exclude both delegation extensions, including when enabled later.
+`agent_chat`
+starts a normal sidebar chat, lists its visible linked family, and sends peer messages in either
+direction. `SessionMeta.linkedFrom` records origin only: it never enters `SubagentsDoc`, `parentOf`,
+`rootOf`, access inheritance, or cancellation. Configuration is copied once (not history or terminal
+state), with conversation-specific terminal tool registrations removed; normal terminal preparation
+installs the new chat's own registrations. Models and thinking levels are not changed by peer sends.
+
+`pocket.linked-chat-peers` keeps local opaque UUID addresses for tools and incoming message headers,
+so shared tool history never automatically records another chat's numeric id. Peer discovery withholds
+titles, folders and status unless every current viewer of the source can see that peer. Underlying
+target errors get metadata-free guidance. This is not content redaction: deliberately sent messages
+and ordinary chat history remain visible to everyone who can read their receiving chat. The launch
+title and task originate in the source tool call and are ordinary source content, not private metadata
+read from the peer. Later private renames are withheld by discovery. Sharing a chat shares its existing
+history; links do not retroactively redact messages.
+
+Each `pocket.linked-chat-call` family document freezes its target and requester. Creation and its
+receipt commit together, and hashed call keys deduplicate admission across restarts. Peer messages
+are prefixed and fenced before `Commands.submit`, so they use normal access, driver, model, spend and
+terminal-preparation checks without interpreting their text as slash commands. Both source and
+target checks apply. Messages are attributed as sent for the requester, not as their own words.
+Delivery is nonblocking: agents explicitly send findings back; there is no automatic response loop.
+A refused first message leaves a linked chat whose local address the tool reports for retry.
+
+Session lists project links per person: a hidden origin becomes only `linkedOrigin: true`, never its
+id or title. Later live broadcasts use the same per-person projection for scoped viewers; filtering
+a previously built global list is not sufficient. `web/linked-chats.js` renders the current visible origin and outgoing links above the
+transcript, including links to archived chats. Linked chats keep independent plan mode, budgets,
+settings and lifecycles. They initially share a working folder; no worktree is created or owned by
+the link. Legacy nested subagents and their automatic batched reports remain unchanged.
 
 ## Terminal extension hosts
 

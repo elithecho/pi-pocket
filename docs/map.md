@@ -70,6 +70,14 @@ A module split into parts keeps its name for the part others import, with the re
 
 `folder-favorites.ts` owns each person's favorite working folders: the `FolderFavoritesDoc` in SQLite, transactional star/unstar operations, and private live updates to their devices. `http/api.ts` exposes `/api/folder-favorites`; `hello.folderFavorites` and the `folder-favorites` event feed the folder picker through `web/store.js`.
 
+`linked-chats.ts` owns ordinary peer chats started by `agent_chat` in the independent
+`extensions/agent-teams.ts` module (**Agent Teams** in the Extensions sheet):
+atomic ownerless creation and call receipts, visible-family discovery, and idempotent messages through
+`Commands.submit`. `SessionMeta.linkedFrom` is a navigation link, not subagent ownership; session lists
+omit hidden origin ids. `web/linked-chats.js`, rendered by `transcript.js`, draws both directions of
+the links. Server and real-browser checks are in `test/linked-chats.test.ts` and
+`test/linked-chats-ui.test.ts`.
+
 ### Terminal Pi plugin bridge
 
 `terminal/manager.ts` connects per-conversation child hosts to admission, dynamic tools, lifecycle hooks
