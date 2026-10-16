@@ -36,6 +36,8 @@ test(
             await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
             const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
             const page = await browsers.open(1);
+
+            await page.setViewport({ width: 1280, height: 800, scale: 1, mobile: false });
             const see = (expression: string) =>
                 until(
                     async () =>
@@ -56,11 +58,24 @@ test(
             await see(
                 `document.querySelector('.pop-menu-head .model-scope button.on')?.textContent === 'scoped'`,
             );
-            await page.evaluate(
-                `document.querySelector('.model-menu').dispatchEvent(new KeyboardEvent('keydown', {key: 'Tab', bubbles: true, cancelable: true})); return 'true'`,
+            await see(`document.activeElement.matches('.model-menu')`);
+            await see(
+                `document.querySelector('.model-scope button').getBoundingClientRect().height < 40`,
             );
+            await page.press("Tab");
             await see(`document.querySelectorAll('.model-menu [role="option"]').length === 3`);
             await see(`document.querySelector('.model-scope button.on')?.textContent === 'all'`);
+            await see(`document.activeElement === document.querySelector('.model-scope button')`);
+            await page.press("Tab");
+            await see(
+                `document.activeElement === document.querySelector('.model-scope button:nth-of-type(2)')`,
+            );
+            await see(`document.querySelector('.model-scope button.on')?.textContent === 'all'`);
+            await page.press("Tab");
+            await see(`document.activeElement.matches('.model-menu .pop-menu-link')`);
+            await see(`document.querySelector('.model-scope button.on')?.textContent === 'all'`);
+            await page.press("Tab");
+            await see(`document.activeElement.matches('.model-menu [role="option"]')`);
             await page.evaluate(
                 `document.querySelector('.model-scope button').click(); return 'true'`,
             );
@@ -73,11 +88,22 @@ test(
                 `(await import('/store.js')).openSheet({type: 'model', query: 'no-such-model'}); return 'true'`,
             );
             await see(`!!document.querySelector('.model-menu input')`);
-            await page.evaluate(
-                `document.querySelector('.model-menu input').dispatchEvent(new KeyboardEvent('keydown', {key: 'Tab', bubbles: true, cancelable: true})); return 'true'`,
-            );
+            await see(`document.activeElement.matches('.model-menu input')`);
+            await page.press("Shift+Tab");
+            await see(`document.activeElement.matches('.model-menu .pop-menu-link')`);
+            await see(`document.querySelector('.model-scope button.on')?.textContent === 'scoped'`);
+            await page.press("Tab");
+            await see(`document.activeElement.matches('.model-menu input')`);
+            await see(`document.querySelector('.model-scope button.on')?.textContent === 'scoped'`);
+            await page.press("Tab");
             await see(`document.querySelector('.model-scope button.on')?.textContent === 'all'`);
             await see(`document.querySelector('.model-menu input').value === 'no-such-model'`);
+
+            await page.setViewport({ width: 390, height: 844, scale: 2, mobile: true });
+            await see(`matchMedia('(pointer: coarse)').matches`);
+            await see(
+                `[...document.querySelectorAll('.model-scope button')].every((button) => { const { width, height } = button.getBoundingClientRect(); return width >= 40 && height >= 40; })`,
+            );
             assert.deepEqual((await app.agentState(session))?.model, original);
         } finally {
             await browsers.closeAll({ final: true });

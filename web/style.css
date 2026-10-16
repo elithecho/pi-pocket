@@ -2792,6 +2792,11 @@ pre.diff .del {
 
 /* A thumb's room around the small mark. */
 @media (pointer: coarse) {
+    .model-scope button {
+        min-width: 40px;
+        min-height: 40px;
+    }
+
     .queued .queued-remove::after {
         content: "";
         position: absolute;

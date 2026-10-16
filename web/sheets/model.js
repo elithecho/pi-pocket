@@ -180,8 +180,15 @@ export function ModelPicker() {
             return;
         }
 
-        if (event.key === "Tab" && scopedModels.length > 0) {
-            event.preventDefault();
+        if (
+            event.key === "Tab" &&
+            !event.shiftKey &&
+            !event.altKey &&
+            !event.ctrlKey &&
+            !event.metaKey &&
+            scopedModels.length > 0 &&
+            (event.target === search.current || event.target === box.current)
+        ) {
             setShowAll((all) => !all);
             setPicked(0);
             list.current?.scrollTo({ top: 0 });
