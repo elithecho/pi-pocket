@@ -74,7 +74,9 @@ async function home(viewport: Viewport = VIEWPORTS.desktop, session = false): Pr
 }
 
 async function open(): Promise<void> {
-    await page.press("Control+K");
+    const apple = await inPage<boolean>(`return JSON.stringify((await import('/ui.js')).APPLE)`);
+
+    await page.press(apple ? "Meta+K" : "Control+K");
     await until(focused, "the launcher's native input focused");
     await settle();
 }
@@ -198,6 +200,43 @@ test("open resets query and focus", real, async () => {
         "Escape restores composer focus after launcher cleanup",
     );
 });
+
+test(
+    "Escape closes the launcher when the key targets the page instead of its input",
+    real,
+    async () => {
+        await home();
+        await open();
+        await page.evaluate(`
+        document.body.dispatchEvent(new KeyboardEvent('keydown', {
+            key: 'Escape', code: 'Escape', bubbles: true, cancelable: true,
+        }));
+    `);
+        await closed();
+    },
+);
+
+test(
+    "one Escape closes the launcher when Vimium consumes keydown and blurs the input",
+    real,
+    async () => {
+        await home();
+        await page.evaluate(`
+        const vimium = (event) => {
+            if (event.key === 'Escape') {
+                document.activeElement.blur();
+                event.preventDefault();
+                event.stopImmediatePropagation();
+            }
+        };
+
+        window.addEventListener('keydown', vimium, true);
+    `);
+        await open();
+        await page.press("Escape");
+        await closed();
+    },
+);
 
 test(
     "New session opens the folder sheet and its final focus is not stolen by launcher cleanup",

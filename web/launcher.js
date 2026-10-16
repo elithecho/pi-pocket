@@ -427,6 +427,26 @@ function resultDetail(item, hits) {
 
 const optionId = (item) => `launcher-option-${encodeURIComponent(item.key)}`;
 
+// Register before other page key handlers can consume Escape, even when the launcher is not open yet.
+window.addEventListener(
+    "keydown",
+    (event) => {
+        if (
+            event.key !== "Escape" ||
+            event.isComposing ||
+            event.keyCode === 229 ||
+            !store.state.launcher
+        ) {
+            return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+        store.set({ launcher: false });
+    },
+    true,
+);
+
 export function Launcher({ leaving, returnTo }) {
     const [query, setQuery] = useState("");
     const [pick, setPick] = useState(0);
@@ -732,14 +752,6 @@ export function Launcher({ leaving, returnTo }) {
         }
 
         const key = event.key;
-
-        if (key === "Escape") {
-            event.preventDefault();
-            event.stopPropagation();
-            close();
-
-            return;
-        }
 
         // Toolbar buttons keep their native Enter/Space behavior; options and the input share navigation.
         if (event.target !== input.current && !event.target.closest(".launcher-item")) {
