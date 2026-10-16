@@ -3,7 +3,6 @@ import { fork, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
     parseFromHost,
-    parseToHost,
     type FromHost,
     type HostDialog,
     type HostLogEntry,
@@ -12,6 +11,7 @@ import {
     type HostSnapshot,
     type ToHost,
 } from "./protocol.ts";
+import { encodeRequest } from "./transport.ts";
 
 export interface ExtensionHostOptions {
     cwd: string;
@@ -32,7 +32,7 @@ export class ExtensionHost {
     readonly id = randomUUID();
     readonly #child: ChildProcess;
     readonly #pending = new Map<string, Pending>();
-    readonly #options: ExtensionHostOptions;
+    readonly #options: Pick<ExtensionHostOptions, "onDialog" | "onExit" | "timeoutMs">;
     readonly #exited: Promise<void>;
     #closing: Promise<void> | undefined;
     #closed = false;
@@ -44,7 +44,11 @@ export class ExtensionHost {
     #ready!: HostReady;
 
     private constructor(options: ExtensionHostOptions) {
-        this.#options = options;
+        this.#options = {
+            onDialog: options.onDialog,
+            onExit: options.onExit,
+            timeoutMs: options.timeoutMs,
+        };
         this.#child = fork(new URL("./worker.ts", import.meta.url), [], {
             cwd: options.cwd,
             execArgv: [],
@@ -63,7 +67,7 @@ export class ExtensionHost {
                 resolve();
 
                 if (unexpected) {
-                    options.onExit?.(error);
+                    this.#options.onExit?.(error);
                 }
             });
             this.#child.once("error", (error) => {
@@ -209,11 +213,14 @@ export class ExtensionHost {
             throw new Error("Pi extension host is no longer connected");
         }
 
-        this.#child.send(parseToHost(packet), (error) => {
-            if (error) {
-                this.#fail(error);
-            }
-        });
+        // Enqueue one contiguous transfer synchronously: concurrent operations cannot mix frames.
+        for (const frame of encodeRequest(packet)) {
+            this.#child.send(frame, (error) => {
+                if (error) {
+                    this.#fail(error);
+                }
+            });
+        }
     }
 
     async #request(
@@ -255,7 +262,16 @@ export class ExtensionHost {
         signal?.addEventListener("abort", abort, { once: true });
 
         try {
-            this.#send(packet);
+            try {
+                this.#send(packet);
+            } catch (error) {
+                // Consume the pending rejection even when validation/send fails synchronously.
+                // #fail is a no-op for an already closed host, which must still reject this request.
+                const failure = error instanceof Error ? error : new Error(String(error));
+
+                this.#pending.get(packet.id)?.reject(failure);
+                this.#fail(failure);
+            }
 
             return await reply;
         } finally {

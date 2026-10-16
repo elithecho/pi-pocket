@@ -26,6 +26,8 @@ import { POCKET_COMMAND_NAMES, extensionInput } from "./commands.ts";
 import { ExtensionHost } from "./host.ts";
 import { answerIdentity, terminalSnapshot, TERMINAL_TOOLS_PREFIX } from "./projection.ts";
 import {
+    MAX_PACKET_BYTES,
+    MAX_REQUEST_BYTES,
     parseHostToolDecision,
     parseHostToolResult,
     wireValue,
@@ -36,6 +38,7 @@ import {
     type HostTool,
 } from "./protocol.ts";
 import { TerminalStore } from "./store.ts";
+import { RequestBudget, type RequestReservation } from "./request-budget.ts";
 
 const context = BACKGROUND_CONTEXT;
 
@@ -113,6 +116,7 @@ export class TerminalManager {
     readonly #app: PocketApp;
     readonly store: TerminalStore;
     readonly #hosts = new Map<ConversationId, HostSlot>();
+    readonly #requests = new RequestBudget();
     readonly #running = new Map<string, Promise<JsonValue>>();
     readonly #dialogs = new Map<string, Waiting>();
     readonly #errors = new Map<ConversationId, string>();
@@ -276,29 +280,48 @@ export class TerminalManager {
         }
     }
 
-    async #open(id: ConversationId, by: User, slot: HostSlot): Promise<Hosted> {
-        const { cwd, trusted } = slot;
-        const snapshot = await terminalSnapshot(this.#app, id);
+    async #initializeHost(id: ConversationId, slot: HostSlot): Promise<ExtensionHost> {
+        const reservation = this.#requests.reserve();
 
-        if (slot.cancelled) {
-            throw new Error("Pi extension host startup was cancelled");
+        try {
+            const snapshot = await terminalSnapshot(this.#app, id);
+
+            reservation.resize(
+                Math.min(
+                    MAX_REQUEST_BYTES,
+                    Buffer.byteLength(JSON.stringify(snapshot)) + MAX_PACKET_BYTES,
+                ),
+            );
+
+            if (slot.cancelled) {
+                throw new Error("Pi extension host startup was cancelled");
+            }
+
+            return await ExtensionHost.open({
+                cwd: slot.cwd,
+                agentDir: this.#app.host.agentDir,
+                trusted: slot.trusted,
+                snapshot,
+                onSpawn: (child) => {
+                    slot.child = child;
+                },
+                onDialog: (operation, dialogId, dialog) =>
+                    this.#ask(id, operation, dialogId, dialog),
+                onExit: (error) => {
+                    if (!this.#closing) {
+                        this.#problem(id, error);
+                    }
+                },
+            });
+        } finally {
+            reservation.release();
         }
+    }
 
-        const host = await ExtensionHost.open({
-            cwd,
-            agentDir: this.#app.host.agentDir,
-            trusted,
-            snapshot,
-            onSpawn: (child) => {
-                slot.child = child;
-            },
-            onDialog: (operation, dialogId, dialog) => this.#ask(id, operation, dialogId, dialog),
-            onExit: (error) => {
-                if (!this.#closing) {
-                    this.#problem(id, error);
-                }
-            },
-        });
+    async #open(id: ConversationId, by: User, slot: HostSlot): Promise<Hosted> {
+        // Initialization releases its reservation before session_start takes another one.
+        const host = await this.#initializeHost(id, slot);
+        const { cwd, trusted } = slot;
         const hosted: Hosted = {
             host,
             cwd,
@@ -458,6 +481,35 @@ export class TerminalManager {
         executionContext: Context = context,
         pending?: { task: TaskId; message: AssistantMessage },
     ): Promise<JsonValue> {
+        // Admission must precede both snapshot construction and the durable operation marker.
+        const reservation = this.#requests.reserve();
+
+        try {
+            return await this.#invokeReserved(
+                id,
+                hosted,
+                by,
+                key,
+                operation,
+                reservation,
+                executionContext,
+                pending,
+            );
+        } finally {
+            reservation.release();
+        }
+    }
+
+    async #invokeReserved(
+        id: ConversationId,
+        hosted: Hosted,
+        by: User,
+        key: string,
+        operation: HostOperation,
+        reservation: RequestReservation,
+        executionContext: Context,
+        pending?: { task: TaskId; message: AssistantMessage },
+    ): Promise<JsonValue> {
         const begun = await this.store.begin(id, key, by, hosted.host.id);
 
         if (begun.status === "done") {
@@ -467,10 +519,18 @@ export class TerminalManager {
         hosted.inflight++;
 
         try {
+            const snapshot = await terminalSnapshot(this.#app, id, pending);
+
+            reservation.resize(
+                Math.min(
+                    MAX_REQUEST_BYTES,
+                    Buffer.byteLength(JSON.stringify(snapshot)) + MAX_PACKET_BYTES,
+                ),
+            );
             const log = await hosted.host.invoke(
                 key,
                 operation,
-                await terminalSnapshot(this.#app, id, pending),
+                snapshot,
                 executionContext.abortSignal,
             );
             const applied = await this.store.apply(id, hosted.host.id, log, (tx, effects) =>

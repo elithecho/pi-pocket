@@ -25,7 +25,6 @@ import {
     MAX_EFFECTS,
     parseCustomEntry,
     parseHostEffect,
-    parseToHost,
     wireValue,
     type FromHost,
     type HostCustomEntry,
@@ -40,6 +39,7 @@ import {
     type WireValue,
 } from "./protocol.ts";
 import { mergeSdkEntries, type AnchoredEntry } from "./entries.ts";
+import { RequestDecoder } from "./transport.ts";
 
 type Operation = { id: string; controller: AbortController; errors: string[]; closed: boolean };
 const operations = new AsyncLocalStorage<Operation>();
@@ -55,6 +55,7 @@ let active: string[] = [];
 let log: HostLogEntry[] = [];
 let sequence = 0;
 let closing = false;
+const requests = new RequestDecoder();
 let knownTools = new Set<string>();
 let catalogueFingerprint = "";
 
@@ -820,6 +821,7 @@ function fail(id: string, error: unknown): void {
 
 function close(): void {
     closing = true;
+    requests.clear();
     runner?.invalidate("Pi Pocket extension host was disposed");
 
     for (const current of running.values()) {
@@ -836,13 +838,17 @@ function close(): void {
 }
 
 process.on("message", (value) => {
-    let packet: ToHost;
+    let packet: ToHost | undefined;
 
     try {
-        packet = parseToHost(value);
+        packet = requests.receive(value);
     } catch (error) {
         fail("protocol", error);
 
+        return;
+    }
+
+    if (!packet) {
         return;
     }
 

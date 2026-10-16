@@ -2,6 +2,8 @@
 import { Type, validateToolArguments, type Static, type TSchema } from "@earendil-works/pi-ai";
 
 export const MAX_PACKET_BYTES = 8 * 1024 * 1024;
+/** Full-history requests can span several bounded IPC frames. */
+export const MAX_REQUEST_BYTES = 64 * 1024 * 1024;
 export const MAX_EFFECTS = 2000;
 const Text = Type.String({ maxLength: MAX_PACKET_BYTES });
 const Name = Type.String({ minLength: 1, maxLength: 512 });
@@ -320,17 +322,29 @@ export type HostReady = Extract<FromHost, { type: "ready" }>;
 
 /** JSON coercion is deliberate only here: symbols in TypeBox schemas and optional undefined fields are omitted. */
 export function wireValue(value: unknown): WireValue {
+    return jsonValue(value, MAX_PACKET_BYTES);
+}
+
+function jsonValue(value: unknown, maxBytes: number): WireValue {
     const text = JSON.stringify(value);
 
-    if (text === undefined || Buffer.byteLength(text) > MAX_PACKET_BYTES) {
-        throw new Error("Terminal extension packet exceeds the JSON protocol limit");
+    if (text === undefined || Buffer.byteLength(text) > maxBytes) {
+        throw new Error(
+            maxBytes === MAX_REQUEST_BYTES
+                ? "Terminal extension request exceeds the 64 MiB JSON protocol limit"
+                : "Terminal extension packet exceeds the JSON protocol limit",
+        );
     }
 
     return JSON.parse(text) as WireValue;
 }
 
-function parse<T extends TSchema>(schema: T, value: unknown): Static<T> {
-    const json = wireValue(value);
+function parse<T extends TSchema>(
+    schema: T,
+    value: unknown,
+    maxBytes = MAX_PACKET_BYTES,
+): Static<T> {
+    const json = jsonValue(value, maxBytes);
 
     if (json === null || typeof json !== "object" || Array.isArray(json)) {
         throw new Error("Terminal extension protocol requires an object packet");
@@ -348,8 +362,27 @@ export const parseHostToolResult = (value: unknown): Static<typeof ToolResult> =
     parse(ToolResult, value);
 export const parseHostToolDecision = (value: unknown): Static<typeof ToolDecision> =>
     parse(ToolDecision, value);
-export const parseHostSnapshot = (value: unknown): HostSnapshot => parse(Snapshot, value);
+export const parseHostSnapshot = (value: unknown): HostSnapshot =>
+    parse(Snapshot, value, MAX_REQUEST_BYTES);
 export const parseCustomEntry = (value: unknown): HostCustomEntry => parse(Custom, value);
 export const parseHostEffect = (value: unknown): HostEffect => parse(Effect, value);
-export const parseToHost = (value: unknown): ToHost => parse(ToHost, value);
+
+/** Logical request validation; transport.ts separately enforces the limit on EVERY wire frame. */
+export function parseToHost(value: unknown): ToHost {
+    const request =
+        value !== null &&
+        typeof value === "object" &&
+        "type" in value &&
+        (value.type === "initialize" || value.type === "invoke");
+    const packet = parse(ToHost, value, request ? MAX_REQUEST_BYTES : MAX_PACKET_BYTES);
+
+    if (packet.type === "initialize" || packet.type === "invoke") {
+        // Bound the complete non-snapshot envelope, including recursive tool/event arguments.
+        // Replacing null with the snapshot then costs at most snapshotBytes + MAX_PACKET_BYTES.
+        wireValue({ ...packet, snapshot: null });
+    }
+
+    return packet;
+}
+
 export const parseFromHost = (value: unknown): FromHost => parse(FromHost, value);

@@ -34,6 +34,21 @@ must not run. PiP's restricted tool selection does not load terminal plugins. Vi
 status/widgets but cannot execute commands or answer dialogs. In take-turns sessions, the current
 requester must also have driver rights.
 
+## Large conversations and request limits
+
+Commands receive the full branch history and Pocket's canonical active context; neither is truncated
+for transport. Initialization and invocation requests larger than 8 MiB travel in contiguous 256 KiB
+chunks and are validated only after complete reassembly. Every IPC frame still has an 8 MiB limit;
+the complete request has a separate 64 MiB limit. The operation/envelope without its snapshot, plugin
+replies and effects retain their 8 MiB bounds. Invalid, mixed or incomplete transfers never dispatch a
+plugin handler.
+
+A shared 256 MiB logical-request reservation budget limits snapshot construction and in-flight
+requests across conversations. This is not a total JavaScript heap limit. When capacity is busy,
+new work fails before building its snapshot or recording an operation; retry after other operations
+finish. That rejection does not interrupt an existing host or execute the rejected handler. Requests
+exceeding the 64 MiB limit fail explicitly rather than silently dropping history.
+
 ## Portable UI
 
 Notifications, named statuses and plain-text widgets render in Pocket. Widgets can sit above or
@@ -95,7 +110,8 @@ including distinct failed/successful provider attempts in the same generation.
 ## Code and checks
 
 `src/server/terminal/manager.ts` connects the process bridge to Pocket. `worker.ts` hosts the SDK;
-`host.ts` owns IPC and child teardown; `protocol.ts` validates bounded packets. `projection.ts` and
+`host.ts` owns IPC and child teardown; `protocol.ts` validates bounded packets. `transport.ts`
+frames/reassembles large requests, and `request-budget.ts` bounds concurrent sender reservations. `projection.ts` and
 `entries.ts` construct the branch-aware SDK view. `store.ts` atomically commits sequenced prefixes,
 operation receipts and outbox intents. Only extension-owned metadata is stored separately from
 ordinary Pocket history. Model-visible messages use normal attributed admission.
@@ -104,7 +120,8 @@ Hermetic regression suites (temporary settings/data; scripted provider only):
 
 ```sh
 node --test test/terminal-host.test.ts test/terminal-store.test.ts \
-  test/terminal-durability.test.ts test/terminal.test.ts test/terminal-ui.test.ts
+  test/terminal-durability.test.ts test/terminal.test.ts test/terminal-ui.test.ts \
+  test/terminal-transport.test.ts test/terminal-large-history.test.ts
 ```
 
 The actual installed package is intentionally separate from the default suite:

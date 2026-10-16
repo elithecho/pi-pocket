@@ -95,6 +95,14 @@ arguments, not their original values. The relative order of all non-terminal sel
 Exact/removal selections retain the bridge while enabled; disabling removes its overlay without
 undoing native selection edits made since host startup.
 
+Large initialization/invocation requests preserve complete history using `terminal/transport.ts`:
+256 KiB chunks, an 8 MiB per-frame limit and a 64 MiB reassembled-request limit. Ordinary frames are
+size-checked too; only fully reassembled and schema-validated requests dispatch. Non-snapshot
+envelopes, replies and effects retain the 8 MiB bound. `terminal/request-budget.ts` reserves up to
+256 MiB of logical in-flight request data across hosts before either snapshot construction or an
+operation marker; capacity rejection is retryable without invalidating a healthy host. Reservations
+release on completion, failure and disposal; this bounds logical request data, not total process heap.
+
 The SDK view projects ordinary Pocket history; only extension-owned custom metadata lives in
 `pocket.terminal-state` (rewindable/asOf). Latest/initial `pocket.terminal-work` holds operational
 records/outbox intents, and cold per-key `pocket.terminal-receipt` documents preserve settled results.
