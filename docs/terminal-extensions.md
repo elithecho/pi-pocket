@@ -78,6 +78,26 @@ native work resumes. Idle rehydration uses `resume`, not `reload`; it must not s
 
 Turning the module off closes hosts and cancels pending plugin work/dialogs. Native conversation
 history and stored extension metadata remain; disabling is the rollback, not deleting stored data.
+
+## Failure policy
+
+Configured Pi plugins share one bridge per conversation. By default the entire bridge is **required**:
+if a plugin cannot load or its host fails, native work that reaches its hooks fails closed. This
+includes incompatible registrations such as terminal shortcuts. The owner may explicitly set
+`"terminalFailurePolicy": "optional"` in the data folder's `config.json` and restart normally.
+Only that exact value opts in; absent or invalid values remain required. There is no app setting
+for this policy in this slice.
+
+Optional means **all** configured Pi plugin hooks are conveniences, not security guards. On a
+startup or runtime host failure Pocket quarantines the whole conversation's bridge, interrupts
+unfinished plugin work without replaying it, removes unavailable plugin tools from the loadout,
+and lets native work continue under native plan, guard, access and spend policy. Committed effects
+and settled command receipts remain. Explicit plugin commands and tools still fail with the cause;
+the existing Terminal problem display warns the owner that native work is continuing without Pi
+plugin hooks. Retry with Terminal extensions **Reload**, re-enable the module, change the working
+folder/project trust, or restart. Idle eviction and Stop do not retry a failed bridge. A healthy
+plugin guard still applies normally under either policy; optional is a whole-bridge choice, not a
+way to skip a single incompatible plugin or a promise of plugin API parity.
 Do not restart the live server while a coding tool call is running. Finish checks, then have the
 owner restart normally.
 

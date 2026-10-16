@@ -256,7 +256,10 @@ export class ExtensionHost {
         );
 
         const abort = () => {
-            this.#fail(new Error("Pi extension operation was cancelled; its host was invalidated"));
+            // Caller cancellation disposes the host, but is not a plugin crash.
+            void this.close(
+                new Error("Pi extension operation was cancelled; its host was invalidated"),
+            );
         };
 
         signal?.addEventListener("abort", abort, { once: true });
@@ -339,12 +342,12 @@ export class ExtensionHost {
         void this.close();
     }
 
-    close(): Promise<void> {
+    close(reason = new Error("Pi extension host was disposed")): Promise<void> {
         this.#closing ??= (async () => {
             const connected = this.#child.connected;
 
             this.#closed = true;
-            this.#rejectAll(new Error("Pi extension host was disposed"));
+            this.#rejectAll(reason);
 
             if (connected) {
                 this.#child.send({ type: "close" }, () => {});

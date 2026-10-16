@@ -60,15 +60,19 @@ before(async () => {
         return;
     }
 
-    const extensions = join(process.env.PI_CODING_AGENT_DIR!, "extensions");
+    const agentDir = process.env.PI_CODING_AGENT_DIR!;
+    const extensions = join(agentDir, "extensions");
 
     mkdirSync(extensions, { recursive: true });
-    const prompts = join(process.env.PI_CODING_AGENT_DIR!, "prompts");
+    const plugin = join(agentDir, "portable.ts");
+
+    writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ extensions: [plugin] }));
+    const prompts = join(agentDir, "prompts");
 
     mkdirSync(prompts, { recursive: true });
     writeFileSync(join(prompts, "ext:portable.md"), "Template expansion $1");
     writeFileSync(
-        join(extensions, "portable.ts"),
+        plugin,
         `let count = 0;
 export default function(pi) {
     pi.registerCommand("portable", { description: "Portable fixture command", handler: async (args, ctx) => {

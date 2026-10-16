@@ -74,6 +74,8 @@ interface PocketConfig {
      * Absent or empty: none, and subagents always run on their session's model.
      */
     subagentModels?: string[];
+    /** All terminal Pi plugins are required unless the owner explicitly opts into whole-bridge isolation. */
+    terminalFailurePolicy?: "required" | "optional";
 }
 
 /** Who may allow a risky tool call: anyone who can steer, or (for guests) only someone other than who asked. */
@@ -187,6 +189,20 @@ export class ConfigStore {
             delete this.#config.subagentModels;
         } else {
             this.#config.subagentModels = [...models];
+        }
+
+        this.save();
+    }
+
+    get terminalFailurePolicy(): "required" | "optional" {
+        return this.#config.terminalFailurePolicy === "optional" ? "optional" : "required";
+    }
+
+    set terminalFailurePolicy(policy: "required" | "optional") {
+        if (policy === "required") {
+            delete this.#config.terminalFailurePolicy;
+        } else {
+            this.#config.terminalFailurePolicy = policy;
         }
 
         this.save();

@@ -646,7 +646,7 @@ test("cwd and trust changes replace the host before further dispatch and never i
     assert.throws(() => process.kill(moved.pid, 0), { code: "ESRCH" });
 });
 
-test("unexpected host exit interrupts unsafe handlers without replay and native chat recovers", async () => {
+test("unexpected host exit interrupts unsafe handlers and required policy recovers only on reload", async () => {
     const { app, id, provider } = await setup("manager-crash");
     const original = await hostInfo(app, id, "before-crash");
     const marker = join(root, "unsafe-handler-attempts");
@@ -662,6 +662,9 @@ test("unexpected host exit interrupts unsafe handlers without replay and native 
     );
     assert.equal(readFileSync(marker, "utf8"), "attempt\n");
     assert.throws(() => process.kill(original.pid, 0), { code: "ESRCH" });
+    await assert.rejects(say(app, id, "native recovery"), /exited.*42/);
+    assert.equal(provider.state.callCount, 0);
+    await app.terminal.resetHosts();
     await say(app, id, "native recovery");
     assert.equal(provider.state.callCount, 1);
     const fresh = await hostInfo(app, id, "after-crash");

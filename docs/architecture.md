@@ -134,6 +134,12 @@ Startup restores active/outbox hosts before harness resume. Idle hosts rehydrate
 scheduled input admission, before Durable prepares that request's tools. Preparation follows the
 Durable caller's cancellation, and shutdown starts child disposal before waiting on Durable hooks.
 Explicit reload/restart uses a `reload` session-start reason; idle rehydration uses `resume`.
+The owner-configured terminal failure policy is required by default. An optional bridge failure
+latches per conversation and closes its child, interrupts unfinished operations behind the store's
+apply/drain lock, then removes plugin tools while retaining the selected terminal hook. Only after
+that cleanup may native hooks continue neutrally; explicit plugin work remains unavailable. Native
+plan/guard never changes. Reload/re-enable, restart, or folder/trust change retries the bridge;
+Stop and idle eviction do not. The plugin outbox retains committed intents during quarantine.
 Browser views contain portable statuses/widgets
 and only the current person's pending dialogs, not the stored SDK ledger. See
 [terminal-extensions.md](terminal-extensions.md) for the supported compatibility boundary and the

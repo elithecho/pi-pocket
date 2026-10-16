@@ -48,12 +48,29 @@ const IDLE_MS = 5 * 60_000;
 
 type Hosted = {
     host: ExtensionHost;
+    slot: HostSlot;
     cwd: string;
     trusted: boolean;
     catalogue: Pick<HostReady, "commands" | "tools">;
     used: number;
     inflight: number;
 };
+class TerminalHostFailure extends Error {
+    constructor(error: unknown) {
+        super(error instanceof Error ? error.message : String(error), { cause: error });
+    }
+}
+
+type Failure = {
+    cwd: string;
+    trusted: boolean;
+    host: ExtensionHost;
+    error: TerminalHostFailure;
+    cleanup: Promise<void>;
+};
+
+type HostReset = { pending: Promise<void>; disabling?: Promise<void> };
+
 type HostSlot = {
     cwd: string;
     trusted: boolean;
@@ -121,6 +138,8 @@ export class TerminalManager {
     readonly #dialogs = new Map<string, Waiting>();
     readonly #errors = new Map<ConversationId, string>();
     readonly #draining = new Map<ConversationId, Promise<void>>();
+    readonly #failures = new Map<ConversationId, Failure>();
+    readonly #resetting = new Map<ConversationId, HostReset>();
     readonly #seen = new Set<ConversationId>();
     readonly #reasons = new Map<ConversationId, "reload" | "resume">();
     #registry: Registry | undefined;
@@ -182,6 +201,90 @@ export class TerminalManager {
         this.#app.refreshViews();
     }
 
+    #quarantine(
+        id: ConversationId,
+        slot: HostSlot,
+        error: TerminalHostFailure,
+    ): Failure | undefined {
+        if (this.#closing || slot.cancelled || this.#hosts.get(id) !== slot || !slot.child) {
+            return this.#failures.get(id);
+        }
+
+        const previous = this.#failures.get(id);
+
+        if (previous) {
+            return previous;
+        }
+
+        const host = slot.child;
+        const failure: Failure = {
+            cwd: slot.cwd,
+            trusted: slot.trusted,
+            host,
+            error,
+            cleanup: Promise.resolve().then(async () => {
+                slot.cancelled = true;
+                this.#cancelDialogs(id);
+                await host.close();
+                await this.store.interrupt(id, host.id, error.message);
+                await this.#restoreQuarantinedTools(id, host.catalogue?.tools ?? []);
+
+                if (this.#hosts.get(id) === slot) {
+                    this.#hosts.delete(id);
+                }
+            }),
+        };
+
+        this.#failures.set(id, failure);
+        // Idle exits have no waiting caller; preserve the rejection for later callers without an unhandled one.
+        void failure.cleanup.catch(() => {});
+        this.#problem(id, this.#failureMessage(error));
+
+        return failure;
+    }
+
+    #failureMessage(error: TerminalHostFailure): string {
+        const policy = this.#app.config.terminalFailurePolicy;
+        const advice =
+            policy === "optional" ? "Native work can continue without Pi plugin hooks. " : "";
+
+        return `Pi extensions unavailable (${policy}): ${error.message}. ${advice}Reload Terminal extensions to retry.`;
+    }
+
+    async #restoreQuarantinedTools(id: ConversationId, tools: HostTool[]): Promise<void> {
+        const installed = this.#registry
+            ?.snapshot()
+            .installed()
+            .find((extension) => extension.name === `${TERMINAL_TOOLS_PREFIX}${id}`);
+        const pluginNames = new Set([
+            ...tools.map((tool) => tool.name),
+            ...(installed?.tools ?? []).map((tool) => tool.name),
+        ]);
+
+        await this.#app.harness.commit(async (tx) => {
+            const agent = await tx.doc(AgentDoc, id);
+            const state = await tx.doc(TerminalStateDoc, id);
+            const applied =
+                state.activeTools !== undefined &&
+                JSON.stringify(agent.tools) === JSON.stringify(state.activeTools);
+
+            if (applied && state.baseTools?.mode === "all") {
+                delete agent.tools;
+            } else if (applied && state.baseTools?.mode === "only") {
+                agent.tools = state.baseTools.names.filter((name) => !pluginNames.has(name));
+            } else if (applied && state.baseTools?.mode === "remove") {
+                agent.tools = { remove: [...state.baseTools.names] };
+            } else if (Array.isArray(agent.tools)) {
+                agent.tools = agent.tools.filter((name) => !pluginNames.has(name));
+            }
+
+            delete state.baseTools;
+            delete state.activeTools;
+        }, context);
+        this.#install(id, []);
+        this.#app.refreshViews();
+    }
+
     async #ensure(
         id: ConversationId,
         by: User,
@@ -199,6 +302,20 @@ export class TerminalManager {
         const cwd = this.#app.cwdOf(id);
         const owner = this.#app.config.users.find((user) => user.role === "owner")!;
         const trusted = this.#app.projectTrust(id, owner).trusted;
+        const fault = this.#failures.get(id);
+
+        if (fault) {
+            await fault.cleanup;
+
+            if (fault.cwd === cwd && fault.trusted === trusted) {
+                throw fault.error;
+            }
+
+            if (this.#failures.get(id) === fault) {
+                this.#failures.delete(id);
+            }
+        }
+
         const existing = this.#hosts.get(id);
 
         if (existing) {
@@ -209,6 +326,10 @@ export class TerminalManager {
                 !existing.child?.closed
             ) {
                 const current = await existing.promise;
+
+                if (this.#failures.has(id)) {
+                    return this.#ensure(id, by, executionContext);
+                }
 
                 current.used = Date.now();
 
@@ -247,6 +368,7 @@ export class TerminalManager {
         executionContext.abortSignal?.throwIfAborted();
 
         if (
+            this.#failures.has(id) ||
             this.#hosts.has(id) ||
             cwd !== this.#app.cwdOf(id) ||
             trusted !== this.#app.projectTrust(id, owner).trusted
@@ -268,16 +390,40 @@ export class TerminalManager {
         try {
             return await slot.promise;
         } catch (error) {
+            if (error instanceof TerminalHostFailure) {
+                const failure = this.#quarantine(id, slot, error);
+
+                if (failure) {
+                    await failure.cleanup;
+
+                    throw failure.error;
+                }
+            } else if (!slot.cancelled && !this.#failures.has(id)) {
+                this.#problem(id, error);
+            }
+
             if (this.#hosts.get(id) === slot) {
                 this.#hosts.delete(id);
             }
 
-            if (!slot.cancelled) {
-                this.#problem(id, error);
-            }
-
             throw error;
         }
+    }
+
+    async #startupCancelled(
+        id: ConversationId,
+        slot: HostSlot,
+        host: ExtensionHost,
+    ): Promise<never> {
+        const failure = this.#failures.get(id);
+
+        if (failure?.host === host && slot.child === host) {
+            await failure.cleanup;
+
+            throw failure.error;
+        }
+
+        throw new Error("Pi extension host startup was cancelled");
     }
 
     async #initializeHost(id: ConversationId, slot: HostSlot): Promise<ExtensionHost> {
@@ -308,10 +454,22 @@ export class TerminalManager {
                 onDialog: (operation, dialogId, dialog) =>
                     this.#ask(id, operation, dialogId, dialog),
                 onExit: (error) => {
-                    if (!this.#closing) {
-                        this.#problem(id, error);
+                    if (!this.#closing && !slot.cancelled) {
+                        this.#quarantine(id, slot, new TerminalHostFailure(error));
                     }
                 },
+            }).catch((error) => {
+                const failure = this.#failures.get(id);
+
+                if (failure && failure.host === slot.child) {
+                    throw failure.error;
+                }
+
+                if (slot.cancelled || this.#closing) {
+                    throw error;
+                }
+
+                throw new TerminalHostFailure(error);
             });
         } finally {
             reservation.release();
@@ -324,6 +482,7 @@ export class TerminalManager {
         const { cwd, trusted } = slot;
         const hosted: Hosted = {
             host,
+            slot,
             cwd,
             trusted,
             catalogue: host.catalogue,
@@ -333,7 +492,13 @@ export class TerminalManager {
 
         try {
             if (slot.cancelled) {
-                throw new Error("Pi extension host startup was cancelled");
+                await this.#startupCancelled(id, slot, host);
+            }
+
+            if (host.catalogue.errors.length > 0) {
+                const first = host.catalogue.errors[0]!;
+
+                throw new TerminalHostFailure(`${basename(first.source)}: ${first.message}`);
             }
 
             this.#install(id, hosted.catalogue.tools);
@@ -345,12 +510,8 @@ export class TerminalManager {
             this.#reasons.delete(id);
             await this.#invoke(id, hosted, by, `boot-${host.id}`, { kind: "start", reason });
 
-            for (const error of host.catalogue.errors) {
-                this.#problem(id, `${basename(error.source)}: ${error.message}`);
-            }
-
             if (slot.cancelled) {
-                throw new Error("Pi extension host startup was cancelled");
+                await this.#startupCancelled(id, slot, host);
             }
 
             slot.hosted = hosted;
@@ -380,7 +541,7 @@ export class TerminalManager {
 
         for (const tool of tools) {
             if (BUILT_IN_TOOLS.has(tool.name) || native.has(tool.name)) {
-                throw new Error(
+                throw new TerminalHostFailure(
                     `Pi extension tool ${tool.name} collides with a native Pocket tool (${basename(tool.source)})`,
                 );
             }
@@ -428,6 +589,12 @@ export class TerminalManager {
         hosted: Hosted,
         effects: readonly HostLogEntry[],
     ): Promise<void> {
+        const failure = this.#failures.get(id);
+
+        if (failure && failure.host === hosted.host) {
+            throw failure.error;
+        }
+
         const changed = effects.findLast((item) => item.effect.kind === "catalogue")?.effect;
         const catalogue = changed?.kind === "catalogue" ? changed.catalogue : hosted.catalogue;
 
@@ -470,6 +637,25 @@ export class TerminalManager {
         if (selection?.kind === "tools") {
             agent.tools = [...selection.names];
         }
+    }
+
+    #hostFailure(
+        id: ConversationId,
+        hosted: Hosted,
+        error: unknown,
+        executionContext: Context,
+    ): never {
+        const failure = this.#failures.get(id);
+
+        if (
+            executionContext.abortSignal?.aborted ||
+            this.#closing ||
+            (hosted.slot.cancelled && failure?.host !== hosted.host)
+        ) {
+            throw error;
+        }
+
+        throw new TerminalHostFailure(error);
     }
 
     async #invoke(
@@ -519,6 +705,14 @@ export class TerminalManager {
         hosted.inflight++;
 
         try {
+            const active = this.#failures.get(id);
+
+            if (active?.host === hosted.host) {
+                await this.store.interrupt(id, hosted.host.id, active.error.message);
+
+                throw active.error;
+            }
+
             const snapshot = await terminalSnapshot(this.#app, id, pending);
 
             reservation.resize(
@@ -527,19 +721,28 @@ export class TerminalManager {
                     Buffer.byteLength(JSON.stringify(snapshot)) + MAX_PACKET_BYTES,
                 ),
             );
-            const log = await hosted.host.invoke(
-                key,
-                operation,
-                snapshot,
-                executionContext.abortSignal,
-            );
+            const log = await hosted.host
+                .invoke(key, operation, snapshot, executionContext.abortSignal)
+                .catch((error) => this.#hostFailure(id, hosted, error, executionContext));
             const applied = await this.store.apply(id, hosted.host.id, log, (tx, effects) =>
                 this.#configure(tx, id, hosted, effects),
             );
 
-            hosted.host.acknowledge(applied.through);
+            try {
+                hosted.host.acknowledge(applied.through);
+            } catch (error) {
+                if (!hosted.host.closed) {
+                    throw error;
+                }
+
+                this.#hostFailure(id, hosted, error, executionContext);
+            }
+
             hosted.catalogue = hosted.host.catalogue;
-            this.#errors.delete(id);
+
+            if (!this.#failures.has(id)) {
+                this.#errors.delete(id);
+            }
 
             for (const item of applied.effects) {
                 if (item.effect.kind === "notify") {
@@ -573,15 +776,34 @@ export class TerminalManager {
 
             return await this.store.result(id, key);
         } catch (error) {
+            if (error instanceof TerminalHostFailure) {
+                const slot = this.#hosts.get(id);
+                const failure =
+                    slot?.child === hosted.host
+                        ? this.#quarantine(id, slot, error)
+                        : this.#failures.get(id);
+
+                if (failure?.host === hosted.host) {
+                    await failure.cleanup;
+
+                    throw failure.error;
+                }
+            }
+
             if (!this.#closing) {
-                await this.store
-                    .interrupt(
-                        id,
-                        hosted.host.id,
-                        error instanceof Error ? error.message : String(error),
-                    )
-                    .catch(() => {});
-                this.#problem(id, error);
+                await this.store.interrupt(
+                    id,
+                    hosted.host.id,
+                    error instanceof Error ? error.message : String(error),
+                );
+
+                if (
+                    !executionContext.abortSignal?.aborted &&
+                    !hosted.slot.cancelled &&
+                    !this.#failures.has(id)
+                ) {
+                    this.#problem(id, error);
+                }
             }
 
             await hosted.host.close();
@@ -614,9 +836,12 @@ export class TerminalManager {
         try {
             await this.#ensure(id, by ?? this.#actor(id), executionContext);
         } catch (error) {
-            // Native chat remains usable; explicit plugin command/tool paths still fail visibly.
-            if (!executionContext.abortSignal?.aborted) {
-                this.#problem(id, error);
+            if (
+                !(error instanceof TerminalHostFailure) ||
+                this.#app.config.terminalFailurePolicy === "required" ||
+                executionContext.abortSignal?.aborted
+            ) {
+                throw error;
             }
         } finally {
             executionContext.abortSignal?.removeEventListener("abort", abort);
@@ -635,6 +860,14 @@ export class TerminalManager {
         try {
             await this.#app.requireDriver(id, by);
         } catch {
+            const failure = this.#failures.get(id);
+
+            if (failure) {
+                await failure.cleanup;
+
+                throw failure.error;
+            }
+
             const existing = this.#hosts.get(id);
 
             return existing ? (await existing.promise).catalogue.commands : [];
@@ -742,13 +975,33 @@ export class TerminalManager {
         executionContext: Context,
     ): Promise<JsonValue> {
         const by = this.#actor(id);
-        const hosted = await this.#ensure(id, by);
+
+        executionContext.abortSignal?.throwIfAborted();
+        this.#app.requireSee(by, id);
+        await this.#app.requireDriver(id, by);
+        executionContext.abortSignal?.throwIfAborted();
+        const key = this.#key(id, `tool:${api.taskId}:${api.callId}`);
+        const recorded = await this.store.lookup(id, key);
+
+        if (recorded && recorded.by !== by.id) {
+            throw new HttpError(403, "This extension request belongs to another person");
+        }
+
+        if (recorded?.status === "done") {
+            return recorded.result;
+        }
+
+        if (recorded?.status === "interrupted") {
+            throw new HttpError(409, recorded.error);
+        }
+
+        const hosted = await this.#ensure(id, by, executionContext);
 
         return this.#invoke(
             id,
             hosted,
             by,
-            this.#key(id, `tool:${api.taskId}:${api.callId}`),
+            key,
             { kind: "tool", name, callId: api.callId, args: wireValue(args) },
             executionContext,
         );
@@ -773,17 +1026,36 @@ export class TerminalManager {
         }
 
         const by = this.#actor(id);
-        const hosted = await this.#ensure(id, by);
 
-        return this.#invoke(
-            id,
-            hosted,
-            by,
-            operationKey,
-            { kind: "event", event: wireValue(value) as Record<string, JsonValue> },
-            executionContext,
-            pending,
-        );
+        try {
+            const hosted = await this.#ensure(id, by, executionContext);
+
+            return await this.#invoke(
+                id,
+                hosted,
+                by,
+                operationKey,
+                { kind: "event", event: wireValue(value) as Record<string, JsonValue> },
+                executionContext,
+                pending,
+            );
+        } catch (error) {
+            const failure = this.#failures.get(id);
+
+            if (
+                failure &&
+                failure.error === error &&
+                this.#app.config.terminalFailurePolicy === "optional" &&
+                !executionContext.abortSignal?.aborted &&
+                !this.#closing
+            ) {
+                await failure.cleanup;
+
+                return null;
+            }
+
+            throw error;
+        }
     }
 
     async messageEnd(
@@ -1008,7 +1280,7 @@ export class TerminalManager {
     }
 
     async drain(id: ConversationId): Promise<void> {
-        if (this.#closing || !this.enabled) {
+        if (this.#closing || !this.enabled || this.#failures.has(id)) {
             return;
         }
 
@@ -1027,7 +1299,7 @@ export class TerminalManager {
 
             if (await this.store.hasPending(id)) {
                 setImmediate(() => {
-                    if (this.enabled) {
+                    if (this.enabled && !this.#failures.has(id)) {
                         void this.drain(id);
                     }
                 });
@@ -1286,18 +1558,80 @@ export class TerminalManager {
         }, context);
     }
 
+    async #resetHost(id: ConversationId, disabled: boolean): Promise<void> {
+        const initial = this.#failures.get(id);
+
+        if (initial) {
+            await initial.cleanup;
+        }
+
+        if (disabled) {
+            await this.store.stop(id, async () => {});
+        }
+
+        await this.evict(id, "reload");
+        const failure = this.#failures.get(id);
+
+        if (failure) {
+            await failure.cleanup;
+
+            if (this.#failures.get(id) === failure) {
+                this.#failures.delete(id);
+            }
+        }
+
+        if (disabled) {
+            await this.#restoreSelection(id);
+        } else if (this.enabled) {
+            await this.#ensure(id, this.#actor(id));
+            await this.drain(id);
+        }
+    }
+
     async resetHosts(disabled = false): Promise<void> {
         for (const id of this.#seen) {
-            if (disabled) {
-                await this.store.stop(id, async () => {});
+            const current = this.#resetting.get(id);
+
+            if (current) {
+                if (disabled && !current.disabling) {
+                    // Reap immediately, even when the reload is waiting in a startup handler.
+                    const disabling = (async () => {
+                        try {
+                            await this.#resetHost(id, true);
+                        } finally {
+                            await current.pending.catch(() => {});
+                        }
+                    })();
+
+                    current.disabling = disabling;
+
+                    const clear = () => {
+                        if (this.#resetting.get(id) === current) {
+                            this.#resetting.delete(id);
+                        }
+                    };
+
+                    void disabling.then(clear, clear);
+                }
+
+                await (current.disabling ?? current.pending);
+                continue;
             }
 
-            await this.evict(id, "reload");
+            const pending = this.#resetHost(id, disabled);
+            const reset: HostReset = {
+                pending,
+                ...(disabled ? { disabling: pending } : {}),
+            };
 
-            if (disabled) {
-                await this.#restoreSelection(id);
-            } else if (this.enabled) {
-                await this.#ensure(id, this.#actor(id));
+            this.#resetting.set(id, reset);
+
+            try {
+                await pending;
+            } finally {
+                if ((disabled || !reset.disabling) && this.#resetting.get(id) === reset) {
+                    this.#resetting.delete(id);
+                }
             }
         }
     }
