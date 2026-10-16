@@ -17,6 +17,10 @@ automatically contain these changes: integration and a normal owner-controlled r
 
 1. Install/configure the plugin in Pi on this host using the normal Pi settings and package filters.
    Pocket does not install missing packages and does not inherit ephemeral terminal `-e` arguments.
+   It skips loose global plugins under Pi's agent `extensions/` folder (normally
+   `~/.pi/agent/extensions/`), which often depend on terminal-only input/editor APIs. Installed
+   packages such as `npm:pi-goal` still load, as do other configured extension paths and trusted
+   project extensions. This exclusion does not change terminal Pi settings.
 2. The owner opens Menu → **Extensions** and enables **Terminal extensions**. It is off by default.
    Read the warning: plugins have the server owner's OS privileges, including files, commands and
    network access. Separate child processes isolate JavaScript globals, **not permissions**.

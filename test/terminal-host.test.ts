@@ -41,9 +41,10 @@ async function fixture(source: string) {
 
     mkdirSync(cwd);
     mkdirSync(join(agentDir, "extensions"), { recursive: true });
-    const path = join(agentDir, "extensions", "fixture.ts");
+    const path = join(agentDir, "fixture.ts");
 
     writeFileSync(path, source);
+    writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ extensions: [path] }));
 
     return { cwd, agentDir, path, view: snapshot(cwd) };
 }
@@ -247,6 +248,25 @@ test("SDK-caught lifecycle errors invalidate the host instead of returning a suc
     await assert.rejects(
         host.invoke("stale", { kind: "command", name: "anything", args: "" }, source.view),
         /no longer connected/,
+    );
+});
+
+test("global loose extensions are excluded before import without disabling configured extensions", async () => {
+    const source = await fixture(counter);
+    const marker = join(source.cwd, "loose-extension-imported");
+
+    writeFileSync(
+        join(source.agentDir, "extensions", "terminal-only.ts"),
+        `import { writeFileSync } from "node:fs";
+        writeFileSync(${JSON.stringify(marker)}, "imported");
+        export default function (pi) { pi.on("input", () => ({ action: "continue" })); }`,
+    );
+    const host = await open(source);
+
+    assert.equal(existsSync(marker), false);
+    assert.deepEqual(
+        host.catalogue.commands.map((command) => command.name),
+        ["count"],
     );
 });
 

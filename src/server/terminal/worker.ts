@@ -1,6 +1,7 @@
 /** Isolated plugin runtime only: no model loop, persistent SDK session, or Pocket policy bypass. */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
+import { isAbsolute, join, relative, sep } from "node:path";
 import {
     convertToLlm,
     createSyntheticSourceInfo,
@@ -317,9 +318,16 @@ async function initialize(packet: Extract<ToHost, { type: "initialize" }>): Prom
         settingsManager: settings,
     });
     const paths = await packages.resolve(async () => "error");
-    const enabled = paths.extensions.filter(
-        (source) => source.enabled && !source.path.startsWith("builtin:"),
-    );
+    // Loose global plugins often depend on terminal-only input/editor APIs. Keep them out of
+    // Pocket without changing Pi's settings; installed packages and project trust still apply.
+    const globalExtensions = join(packet.agentDir, "extensions");
+    const enabled = paths.extensions.filter((source) => {
+        const local = relative(globalExtensions, source.path);
+        const globalLoose =
+            local === "" || (local !== ".." && !local.startsWith(`..${sep}`) && !isAbsolute(local));
+
+        return source.enabled && !source.path.startsWith("builtin:") && !globalLoose;
+    });
     const loader = new DefaultResourceLoader({
         cwd: packet.cwd,
         agentDir: packet.agentDir,

@@ -28,9 +28,13 @@ import { APP_ROOT } from "../src/server/config.ts";
 const apps = new Set<App>();
 const agentDir = process.env.PI_CODING_AGENT_DIR!;
 
-mkdirSync(join(agentDir, "extensions"), { recursive: true });
+mkdirSync(agentDir, { recursive: true });
 writeFileSync(
-    join(agentDir, "extensions", "fixture.ts"),
+    join(agentDir, "settings.json"),
+    JSON.stringify({ extensions: [join(agentDir, "fixture.ts")] }),
+);
+writeFileSync(
+    join(agentDir, "fixture.ts"),
     `import { existsSync, appendFileSync } from "node:fs";
 let count = 0;
 export default function (pi) {

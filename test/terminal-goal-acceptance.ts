@@ -423,9 +423,13 @@ test("spend exhaustion blocks actual goal continuation and Stop cancels it befor
 test("actual goal pause remains usable while a registered plugin tool is waiting for its owner", async () => {
     const agentDir = process.env.PI_CODING_AGENT_DIR!;
 
-    mkdirSync(join(agentDir, "extensions"), { recursive: true });
+    mkdirSync(agentDir, { recursive: true });
     writeFileSync(
-        join(agentDir, "extensions", "busy-tool-fixture.ts"),
+        join(agentDir, "settings.json"),
+        JSON.stringify({ extensions: [resolve(path), join(agentDir, "busy-tool-fixture.ts")] }),
+    );
+    writeFileSync(
+        join(agentDir, "busy-tool-fixture.ts"),
         `export default pi => pi.registerTool({
         name: "wait_for_owner", description: "Temporary tool-context concurrency fixture", parameters: { type: "object", properties: {} },
         execute: async (_id, _args, _signal, _update, ctx) => {
