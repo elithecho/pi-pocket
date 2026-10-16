@@ -71,7 +71,7 @@ A module split into parts keeps its name for the part others import, with the re
 | `memory.ts`               | Memory: lessons Pi keeps across sessions, each for a project (a repository with its worktrees, or a folder) or everywhere; the lessons in force for a session, and people's view, writes, and approvals                                                 |
 | `folder-favorites.ts`     | Each person's favorite folders (`/api/folder-favorites`): starring and unstarring one in a transaction, and each person's list sent only to their own tabs                                                                                              |
 
-`folder-favorites.ts` owns each person's favorite working folders: the `FolderFavoritesDoc` in SQLite, transactional star/unstar operations, and private live updates to their devices. `http/api.ts` exposes `/api/folder-favorites`; `hello.folderFavorites` and the `folder-favorites` event feed the folder picker through `web/store.js`.
+`folder-favorites.ts` owns each person's favorite working folders: the `FolderFavoritesDoc` in SQLite, transactional star/unstar operations, and private live updates to their devices. `http/api.ts` exposes `/api/folder-favorites`; `hello.folderFavorites` and the `folder-favorites` event feed the favorites-first New session chooser and folder picker through `web/store.js`. `web/sheets/folder.js` keeps the full browser for an explicit choice, empty favorites, and moving a session.
 
 `linked-chats.ts` owns ordinary peer chats started by `agent_chat` in the independent
 `extensions/agent-teams.ts` module (**Agent Teams** in the Extensions sheet):
