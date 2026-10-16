@@ -2804,6 +2804,11 @@ pre.diff .del {
         height: 40px;
     }
 
+    .model-scope button {
+        min-width: 40px;
+        min-height: 40px;
+    }
+
     .queued .queued-remove::after {
         content: "";
         position: absolute;
@@ -5456,17 +5461,23 @@ pre.diff .del {
     color: var(--muted);
 }
 
-.model-scope-wrap {
-    padding: 0 14px 10px;
+.model-scope {
+    display: inline-flex;
+    align-items: center;
+    margin-left: 5px;
+    font-size: 11px;
+    font-weight: 400;
+    white-space: nowrap;
 }
 
-.segmented.model-scope {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
+.model-scope button {
+    padding: 6px 3px;
+    color: var(--muted);
+    font: inherit;
 }
 
-.segmented.model-scope button {
-    min-height: 40px;
+.model-scope button.on {
+    color: var(--accent);
 }
 
 /* Thinking: the levels in one track, the chosen one raised. Past the general segmented rules, which come later. */
