@@ -340,7 +340,7 @@ export class LinkedChats {
         // A recipient-local address reveals no source id, even to someone invited only to the recipient later.
         const replyTo = await this.#address(id, Number(source));
         // Prefix before admission, so a peer's /command is text, never an extension command or prompt expansion.
-        const text = `Message from linked peer ${replyTo}. Reply with agent_chat send to that address when needed. This is a peer message, not the person's own words.\n<linked-chat-message>\n${defang(message)}\n</linked-chat-message>`;
+        const text = `Message from linked peer ${replyTo}. Reply with team send to that address when needed. This is a peer message, not the person's own words.\n<linked-chat-message>\n${defang(message)}\n</linked-chat-message>`;
         const sent = await app.commands.submit(
             id,
             user,

@@ -269,7 +269,10 @@ function showSession() {
     notify("info", parts.join(" · "));
 }
 
-/** `args` in brackets is optional. `available` hides a command where it does not apply. */
+/**
+ * `args` in brackets is optional. `available` hides a command where it does not apply. Keep the names the same as
+ * `BUILT_IN_COMMANDS` in `src/server/extension-web.ts`, which keeps them from extensions' commands.
+ */
 const COMMANDS = [
     {
         name: "compact",
@@ -508,7 +511,29 @@ function setTheme(arg) {
     notify("info", `Theme: ${id === "desktop" ? "follows your desktop" : THEMES[id].name}.`);
 }
 
-const available = () => COMMANDS.filter((command) => command.available?.() ?? true);
+/** Extensions' commands this person may run (`hello` lists them). A prompt template of the same name keeps it. */
+function extensionCommands() {
+    const prompts = new Set(templates().map((template) => template.name));
+
+    return (store.state.server?.extensionCommands ?? [])
+        .filter((command) => !prompts.has(command.name))
+        .map((command) => ({
+            ...command,
+            extension: true,
+            run: async (args, requestId) => {
+                const result = await actions.extensionCommand(command.id, args, requestId);
+
+                if (result?.type === "toast") {
+                    notify(result.level, result.message);
+                }
+            },
+        }));
+}
+
+const available = () => [
+    ...COMMANDS.filter((command) => command.available?.() ?? true),
+    ...extensionCommands(),
+];
 
 /** The command a message runs, or null for a message to Pi (such as one starting with a path like /etc/hosts). */
 export function parseCommand(text) {

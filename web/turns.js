@@ -177,6 +177,16 @@ const ONE = {
     "repository watch": "a repository watch",
 };
 
+/**
+ * How extensions' browser modules sum up their own tools' calls (`pocket.toolCall`): `extension-ui.js` sets it, and it
+ * gives a kind as `DID` has them (`{ verb, noun?, by? }`), or undefined for the default.
+ */
+let ownSummary = () => undefined;
+
+export function setCallSummary(summary) {
+    ownSummary = summary;
+}
+
 /** Calls whose verb depends on what they were asked to do: listing or cancelling schedules, denying a call. */
 function byAction(name, args) {
     if (name === "agent_chat") {
@@ -252,7 +262,9 @@ export function summarize(steps, thinking) {
             args.action !== "send";
         const kind = checking
             ? { verb: "checked on subagents" }
-            : (byAction(call.name, args) ?? DID[call.name] ?? { verb: `used ${call.name}` });
+            : (byAction(call.name, args) ??
+              DID[call.name] ??
+              ownSummary(call.name, args) ?? { verb: `used ${call.name}` });
         const nouns = did.get(kind.verb) ?? new Map();
 
         did.set(kind.verb, nouns);

@@ -469,7 +469,7 @@ test("the owner turns extensions off and on, the guard follows its switch, and t
     assert.equal(module("agent-teams.ts").title, "Agent Teams");
     assert.deepEqual(
         module("agent-teams.ts").extensions.map(({ name, tools }) => ({ name, tools })),
-        [{ name: "pocket-agent-teams", tools: ["agent_chat"] }],
+        [{ name: "pocket-agent-teams", tools: ["team"] }],
     );
 
     assert.equal(module("terminal.ts").title, "Terminal extensions");

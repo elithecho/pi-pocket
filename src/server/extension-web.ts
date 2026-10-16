@@ -1,10 +1,11 @@
 /**
  * Extensions' web parts. While a module loads, the `web` its default export gets registers its routes (under
- * `/api/x/<module>/`) and its browser module (served from `/x/<module>/<rev>/`). They count only once the module
- * installed, and they replace the previous version's in one step, as its extensions do; turning the module off removes
- * them. The browser module loads in the tabs of the people its access lets in, and gets the events the module sends.
+ * `/api/x/<module>/`), its browser module (served from `/x/<module>/<rev>/`), and its commands for the message box. They
+ * count only once the module installed, and they replace the previous version's in one step, as its extensions do;
+ * turning the module off removes them. The browser module loads in the tabs of the people its access lets in, and gets
+ * the events the module sends.
  */
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
     type Dirent,
     type FSWatcher,
@@ -17,7 +18,14 @@ import {
 import { extname, join } from "node:path";
 import type { User } from "./config.ts";
 import { describe } from "./errors.ts";
-import type { ExtensionWeb, WebAccess, WebHandler, WebMethod } from "./host.ts";
+import type {
+    CommandInfo,
+    ExtensionCommand,
+    ExtensionWeb,
+    WebAccess,
+    WebHandler,
+    WebMethod,
+} from "./host.ts";
 
 /**
  * The version of the extension API: the server's `web` and the app's `pocket`. It goes up only when something modules
@@ -47,6 +55,54 @@ const MAX_FILES = 2000;
 const MAX_FOLDERS = 500;
 /** How many of a browser module's folders are watched for edits; deeper or more are seen at the module's next load. */
 const MAX_WATCHED = 64;
+
+/**
+ * The message box's own commands: a module's command may not take their names, whether they show now or not. Keep it
+ * the same as `COMMANDS` in `web/commands.js`. They are one word each, and a module's command names have a `-`, so a new
+ * built-in never takes a module's name.
+ */
+export const BUILT_IN_COMMANDS: ReadonlySet<string> = new Set([
+    "compact",
+    "reset",
+    "instructions",
+    "model",
+    "thinking",
+    "new",
+    "name",
+    "cwd",
+    "plan",
+    "schedule",
+    "remember",
+    "until",
+    "watch",
+    "stop",
+    "copy",
+    "find",
+    "session",
+    "export",
+    "resume",
+    "chat",
+    "browser",
+    "files",
+    "changes",
+    "branch",
+    "pip",
+    "peek",
+    "artifacts",
+    "login",
+    "settings",
+    "trust",
+    "theme",
+]);
+/** A module's command name: lowercase, starting with a letter, with at least one `-` (`clock-zone`). */
+const COMMAND_NAME = /^(?=[^-]*-)[a-z][a-z0-9_-]{0,63}$/;
+
+/** The most commands a module may register, and the longest description or `args` hint each may have. */
+const MAX_COMMANDS = 50;
+const MAX_COMMAND_TEXT = 200;
+
+/** A command with its handler and its module's file, which stay on the server. */
+export type RegisteredCommand = CommandInfo & Pick<ExtensionCommand, "handler"> & { file: string };
 
 /** Marks the errors a module made with `web.error`: only their status and words reach the browser as they are. */
 const EXPOSED = Symbol("pocket.webError");
@@ -127,6 +183,7 @@ export class WebPart {
     readonly directory: string;
     readonly routes: Route[] = [];
     client: Client | undefined;
+    readonly commands: RegisteredCommand[] = [];
     readonly disposers: (() => void)[] = [];
     /** The browser module's folders that are watched, by path. */
     readonly watchers = new Map<string, FSWatcher>();
@@ -145,9 +202,9 @@ export class WebPart {
         this.title = title;
     }
 
-    /** Whether it added nothing to the app: no routes and no browser module (cleanups do not count). */
+    /** Whether it added nothing to the app: no routes, browser module, or commands (cleanups do not count). */
     get empty(): boolean {
-        return this.routes.length === 0 && this.client === undefined;
+        return this.routes.length === 0 && this.client === undefined && this.commands.length === 0;
     }
 }
 
@@ -163,6 +220,8 @@ interface Options {
     log?: (message: string) => void;
     /** Tell the owner something wrong with a module that they can mend (its browser module gone, say). */
     warn?: (message: string) => void;
+    /** The modules' commands changed: tabs must hear the new list. */
+    commandsChanged?: () => void;
 }
 
 export class ExtensionWebs {
@@ -187,12 +246,16 @@ export class ExtensionWebs {
 
         this.#staged.add(part);
 
-        const open = (what: string) => {
+        const sealed = (what: string) => {
             if (part.sealed) {
                 throw new Error(
-                    `web.${what}: register routes and the browser module while the module loads`,
+                    `web.${what}: register routes, the browser module, and commands while the module loads`,
                 );
             }
+        };
+
+        const open = (what: string) => {
+            sealed(what);
 
             if (!MODULE_NAME.test(part.module)) {
                 throw new Error(
@@ -241,6 +304,10 @@ export class ExtensionWebs {
                         : "The extension failed.";
 
                 return Object.assign(new Error(words), { status, [EXPOSED]: true });
+            },
+            command: (name, command) => {
+                sealed("command");
+                part.commands.push(this.#checkCommand(part, name, command));
             },
             onDispose: (dispose) => {
                 if (typeof dispose !== "function") {
@@ -330,6 +397,106 @@ export class ExtensionWebs {
         this.#options.deliver?.(part, part.client.access, event, JSON.parse(json), to);
     }
 
+    /** A command as registered, checked: its name must not take a built-in command's, or another module's. */
+    #checkCommand(part: WebPart, name: unknown, command: unknown): RegisteredCommand {
+        if (typeof name !== "string" || !COMMAND_NAME.test(name)) {
+            throw new Error(
+                `web.command: ${String(name).slice(0, 64)}: a name is up to 64 lowercase letters, digits, - and _, starting with a letter, with at least one - (clock-zone), without the /`,
+            );
+        }
+
+        if (typeof command !== "object" || command === null) {
+            throw new Error(`web.command: /${name}: give it { description, scope, handler }`);
+        }
+
+        const { description, args, scope, handler } = command as Partial<ExtensionCommand>;
+
+        if (typeof description !== "string" || description.trim() === "") {
+            throw new Error(`web.command: /${name} needs a description`);
+        }
+
+        if (args !== undefined && typeof args !== "string") {
+            throw new Error(`web.command: /${name}: args is a hint in words, such as "[zone]"`);
+        }
+
+        if (description.length > MAX_COMMAND_TEXT || (args?.length ?? 0) > MAX_COMMAND_TEXT) {
+            throw new Error(
+                `web.command: /${name}: its description and args are ${MAX_COMMAND_TEXT} characters at most`,
+            );
+        }
+
+        if (part.commands.length >= MAX_COMMANDS) {
+            throw new Error(`web.command: a module has ${MAX_COMMANDS} commands at most`);
+        }
+
+        if (scope !== "conversation" && scope !== "global") {
+            throw new Error(`web.command: /${name}: scope is "conversation" or "global"`);
+        }
+
+        if (typeof handler !== "function") {
+            throw new Error(`web.command: /${name} needs a handler`);
+        }
+
+        if (BUILT_IN_COMMANDS.has(name)) {
+            throw new Error(`web.command: /${name} is one of the app's own commands`);
+        }
+
+        if (part.commands.some((each) => each.name === name)) {
+            throw new Error(`web.command: /${name} is registered twice`);
+        }
+
+        this.#clash(part, name);
+
+        return {
+            id: randomUUID(),
+            file: part.file,
+            name,
+            description,
+            scope,
+            handler,
+            ...(args === undefined ? {} : { args }),
+        };
+    }
+
+    /** Throw when another module has a command named `name`: the first one in keeps it. */
+    #clash(part: WebPart, name: string): void {
+        for (const other of this.#parts.values()) {
+            if (other.module !== part.module && other.commands.some((each) => each.name === name)) {
+                throw new Error(`web.command: ${other.file} already has a command named /${name}`);
+            }
+        }
+    }
+
+    /**
+     * Check a version before it installs: another module may have taken one of its commands' names while it loaded.
+     * Throws, so the version before stays.
+     */
+    check(part: WebPart): void {
+        for (const command of part.commands) {
+            this.#clash(part, command.name);
+        }
+    }
+
+    /** Every installed module's commands, without their handlers. */
+    commands(): CommandInfo[] {
+        return [...this.#parts.values()].flatMap((part) =>
+            part.commands.map(({ handler: _handler, file: _file, ...info }) => info),
+        );
+    }
+
+    /** One command by its id: the very version a browser chose, never another module's or a newer version's. */
+    command(id: string): RegisteredCommand | undefined {
+        for (const part of this.#parts.values()) {
+            const found = part.commands.find((each) => each.id === id);
+
+            if (found !== undefined) {
+                return found;
+            }
+        }
+
+        return undefined;
+    }
+
     /** Log a problem with a module's use of `web`, once per version and kind, so a loop does not fill the log. */
     #warn(part: WebPart, key: string, message: string): void {
         if (part.warned.has(key)) {
@@ -365,6 +532,10 @@ export class ExtensionWebs {
         if (clientKey(previous) !== clientKey(part)) {
             this.#changed(previous, part);
         }
+
+        if ((previous?.commands.length ?? 0) > 0 || part.commands.length > 0) {
+            this.#options.commandsChanged?.();
+        }
     }
 
     /** The module failed to load: what it registered goes, and the version before stays. */
@@ -387,6 +558,10 @@ export class ExtensionWebs {
 
         if (part.client !== undefined) {
             this.#changed(part);
+        }
+
+        if (part.commands.length > 0) {
+            this.#options.commandsChanged?.();
         }
     }
 
@@ -505,7 +680,7 @@ export class ExtensionWebs {
     /** What a module's web part has, for the Extensions sheet. */
     describe(
         file: string,
-    ): { routes: string[]; client?: WebAccess; access: WebAccess } | undefined {
+    ): { routes: string[]; client?: WebAccess; access: WebAccess; commands: string[] } | undefined {
         const part = this.#parts.get(moduleName(file));
 
         if (part === undefined || part.file !== file || part.empty) {
@@ -523,6 +698,7 @@ export class ExtensionWebs {
             routes: part.routes.map((route) => `${route.method} ${route.path}`),
             ...(part.client === undefined ? {} : { client: part.client.access }),
             access,
+            commands: part.commands.map((command) => `${command.scope} /${command.name}`),
         };
     }
 

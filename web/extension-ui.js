@@ -1,7 +1,7 @@
 // Extensions' browser modules. An extension module can give the app one (`web.client` on the server): it loads here, in
 // the tabs of the people it is for, and its default export gets `pocket`, the app's API for extensions. With it, it adds
-// rail buttons, menu rows, launcher actions, pages in the conversation's place, and sheets, calls its own routes, and
-// hears its module's events. What it added goes when it reloads or is turned off; one that fails says why, and the app
+// rail buttons, menu rows, launcher actions, pages in the conversation's place, sheets, and how its own tools' calls
+// show, calls its own routes, and hears its module's events. What it added goes when it reloads or is turned off; one that fails says why, and the app
 // goes on without it. A tab opened with `?noext=1` loads none of them (safe mode), for as long as the tab stays open.
 import { Component, Fragment, h, options } from "preact";
 import {
@@ -14,7 +14,9 @@ import {
     useState,
 } from "preact/hooks";
 import { replaceAddress, useBack } from "./back.js";
+import { describersChanged, setCallDescriber } from "./calls.js";
 import { api, closeSheet, notify, onExtensionEvent, openSheet, store } from "./store.js";
+import { setCallSummary } from "./turns.js";
 import { html, Icon, iconPath, Loader, Markdown, Sheet, Spinner, Switch } from "./ui.js";
 
 /**
@@ -337,7 +339,10 @@ function follow(state) {
     const key = [
         safe ? "safe" : "",
         state.me ? "in" : "",
-        ...list.map((each) => `${each.module}@${each.url}`),
+        ...list.map(
+            (each) =>
+                `${each.module}@${each.url}@${Array.isArray(each.tools) ? each.tools.join(",") : ""}`,
+        ),
     ].join("\n");
 
     if (key === loadedKey) {
@@ -367,8 +372,13 @@ function sync(list) {
     const wanted = new Map(safe ? [] : list.map((each) => [each.module, each]));
 
     for (const record of [...modules.values()]) {
-        if (wanted.get(record.module)?.url !== record.url) {
+        const entry = wanted.get(record.module);
+
+        if (entry?.url !== record.url) {
             unload(record);
+        } else if (Array.isArray(entry.tools)) {
+            // A module reloaded on the server may install other tools, with the same browser module.
+            record.tools = entry.tools;
         }
     }
 
@@ -422,6 +432,10 @@ async function load(entry) {
         status: "loading",
         error: null,
         adds: Object.fromEntries(KINDS.map((kind) => [kind, new Map()])),
+        // How its own tools' calls show (`pocket.toolCall`), by tool.
+        calls: new Map(),
+        // The tools its module installs, whose calls it may describe; none known from a server before that list.
+        tools: Array.isArray(entry.tools) ? entry.tools : null,
         disposers: [],
         listeners: new Set(),
         // Replaced or turned off.
@@ -507,6 +521,11 @@ function unload(record) {
 function teardown(record) {
     for (const kind of KINDS) {
         record.adds[kind].clear();
+    }
+
+    if (record.calls.size > 0) {
+        record.calls.clear();
+        describersChanged();
     }
 
     record.listeners.clear();
@@ -802,6 +821,34 @@ function pocketFor(record) {
         launcher: (spec) => add("launcher", spec),
         page: (spec) => add("page", spec),
         sheet: (spec) => add("sheet", spec),
+        /** How calls of one of its tools show: in a line in transcripts and peek tiles, and in a group's summary. */
+        toolCall(spec) {
+            tick(record);
+
+            const current = toolCallOf(record, spec);
+
+            if (current === null) {
+                return Object.freeze({ remove() {} });
+            }
+
+            if (live()) {
+                record.calls.set(current.tool, current);
+                describersChanged();
+                redraw();
+            }
+
+            return Object.freeze({
+                remove() {
+                    tick(record);
+
+                    if (live() && record.calls.get(current.tool) === current) {
+                        record.calls.delete(current.tool);
+                        describersChanged();
+                        redraw();
+                    }
+                },
+            });
+        },
         // Its own page and sheet only, and only while this version is loaded: a timer that outlived it opens or closes
         // nothing, not even the page of the version after it.
         openPage(id) {
@@ -912,6 +959,166 @@ function pocketFor(record) {
         },
     });
 }
+
+// ─── Tool calls: how a module's own tools show ───────────────────────────────
+
+/**
+ * A copy of what `pocket.toolCall` was given, once it holds; null from a server that does not say which tools are the
+ * module's, where calls keep the default display. A module describes only the tools its own module installs, by the
+ * very names Pi runs them by, so it never changes how another's calls show (a command shown as something else).
+ */
+function toolCallOf(record, spec) {
+    if (typeof spec !== "object" || spec === null) {
+        throw new Error("pocket.toolCall: give it an object");
+    }
+
+    const copy = { ...spec };
+    const name = `pocket.toolCall ${String(copy.tool)}`;
+
+    if (typeof copy.tool !== "string") {
+        throw new Error("pocket.toolCall: give it the name of one of its tools");
+    }
+
+    if (record.tools === null) {
+        return null;
+    }
+
+    if (!record.tools.includes(copy.tool)) {
+        throw new Error(`${name}: it is not one of this module's tools`);
+    }
+
+    if (typeof copy.label !== "function") {
+        throw new Error(`${name}: give it a label function`);
+    }
+
+    for (const field of ["subject", "summary"]) {
+        if (copy[field] !== undefined && typeof copy[field] !== "function") {
+            throw new Error(`${name}: ${field} is a function`);
+        }
+    }
+
+    for (const field of ["icon", "iconPath"]) {
+        if (copy[field] !== undefined && typeof copy[field] !== "string") {
+            throw new Error(`${name}: ${field} is text`);
+        }
+    }
+
+    return copy;
+}
+
+/** The module that describes a tool's calls, first in the server's order, and what it gave. */
+function describerOf(tool) {
+    for (const module of order) {
+        const record = modules.get(module);
+
+        if (liveRecord(record) && record.calls.has(tool)) {
+            return { record, spec: record.calls.get(tool) };
+        }
+    }
+
+    return undefined;
+}
+
+/** Describers that failed, said once each in the console: they are asked again at every draw. */
+const toldFailures = new Set();
+
+/**
+ * What a describer gives for a call's arguments (a copy, so it cannot change them), as one line of text up to `max`
+ * long; undefined when it throws or gives anything else.
+ */
+function described(record, tool, field, run, args, max) {
+    let value;
+
+    try {
+        value = run(structuredClone(args));
+    } catch (error) {
+        const key = `${record.module}:${tool}:${field}`;
+
+        if (!toldFailures.has(key)) {
+            toldFailures.add(key);
+            console.error(`${record.title}: describing a ${tool} call (${field}) failed`, error);
+        }
+
+        return undefined;
+    }
+
+    if (typeof value !== "string") {
+        return undefined;
+    }
+
+    const line = value.replace(/\s+/g, " ").trim();
+
+    return line.length > max ? `${line.slice(0, max - 1)}…` : line;
+}
+
+setCallDescriber((tool, args) => {
+    const found = describerOf(tool);
+
+    if (found === undefined) {
+        return undefined;
+    }
+
+    const { record, spec } = found;
+    const label = described(record, tool, "label", spec.label, args, 80);
+    const subject =
+        spec.subject === undefined
+            ? ""
+            : described(record, tool, "subject", spec.subject, args, 160);
+
+    if (!label || subject === undefined) {
+        return undefined;
+    }
+
+    return {
+        label,
+        subject,
+        ...(spec.icon === undefined && spec.iconPath === undefined
+            ? {}
+            : { iconPath: pathOf(spec) }),
+    };
+});
+
+setCallSummary((tool, args) => {
+    const found = describerOf(tool);
+
+    if (found?.spec.summary === undefined) {
+        return undefined;
+    }
+
+    const { record, spec } = found;
+    let kind;
+
+    try {
+        kind = spec.summary(structuredClone(args));
+    } catch (error) {
+        const key = `${record.module}:${tool}:summary`;
+
+        if (!toldFailures.has(key)) {
+            toldFailures.add(key);
+            console.error(`${record.title}: summing up a ${tool} call failed`, error);
+        }
+
+        return undefined;
+    }
+
+    const word = (value) => typeof value === "string" && value.trim() !== "" && value.length <= 60;
+
+    if (
+        typeof kind !== "object" ||
+        kind === null ||
+        !word(kind.verb) ||
+        (kind.noun !== undefined && !word(kind.noun)) ||
+        (kind.by !== undefined && !word(kind.by))
+    ) {
+        return undefined;
+    }
+
+    return {
+        verb: kind.verb.trim(),
+        ...(kind.noun === undefined ? {} : { noun: kind.noun.trim() }),
+        ...(kind.by === undefined ? {} : { by: kind.by }),
+    };
+});
 
 // ─── Opening what extensions added ───────────────────────────────────────────
 

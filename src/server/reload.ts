@@ -6,8 +6,8 @@
  * Modules come from two folders: Pi Pocket's own (`src/server/extensions/`), and the owner's drop-ins
  * (`extensions/` in the data folder), which load after them and stay off until the owner turns them on. The owner
  * can turn modules off and on from the app. A module that is off is not loaded, and turning one off uninstalls what
- * it installed; a tool call already running still finishes. What a module adds to the app (routes, a browser module)
- * is kept by `ExtensionWebs` and goes in and out with its extensions.
+ * it installed; a tool call already running still finishes. What a module adds to the app (routes, a browser module,
+ * commands) is kept by `ExtensionWebs` and goes in and out with its extensions.
  */
 import {
     existsSync,
@@ -98,6 +98,7 @@ export const BUILT_IN_TOOLS: ReadonlySet<string> = new Set([
     "browser",
     "subagent",
     "agent_chat",
+    "team",
     "schedule",
     "codemode",
     "memory",
@@ -141,10 +142,10 @@ export interface ExtensionInfo {
         wraps: string[];
     }[];
     /**
-     * What it adds to the app: its routes (`GET status`), who loads its browser module, when it has one, and the widest
-     * access of the two.
+     * What it adds to the app: its routes (`GET status`), who loads its browser module, when it has one, the widest
+     * access of the two, and its commands (`conversation /name`, `global /name`).
      */
-    web?: { routes: string[]; client?: WebAccess; access?: WebAccess };
+    web?: { routes: string[]; client?: WebAccess; access?: WebAccess; commands?: string[] };
     /** Why the module is not loaded, when it failed. */
     error?: string;
 }
@@ -562,6 +563,7 @@ export class ExtensionLoader {
                 this.#checkNames(file, extensions);
             }
 
+            this.#webs.check(part);
             this.#replace(extensions, this.#installed.get(file) ?? []);
             this.#installed.set(file, extensions);
             this.#errors.delete(file);

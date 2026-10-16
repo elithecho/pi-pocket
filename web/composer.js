@@ -405,6 +405,8 @@ export function Composer() {
     const list = useRef(null);
     // One per `!` command: sending it again after a lost reply runs it once.
     const requestId = useRef(uid());
+    // An extension's command while its send is unresolved: sending the same text again finds the first run.
+    const commandRequest = useRef(null);
     const busy = view.live.busy;
     const agent = view.agent;
 
@@ -566,17 +568,47 @@ export function Composer() {
         });
 
     /** Run a slash command. The text goes away once it worked; attached files stay for the next message. */
-    const runCommand = async ({ command, arg }) => {
+    const runCommand = async ({ command, arg }, sent) => {
+        let request = null;
+
+        // Native web commands have versioned IDs; terminal commands own a reload-safe receipt journal.
+        if (command.extension && command.id !== undefined) {
+            const kept = commandRequest.current;
+
+            request =
+                kept !== null &&
+                kept.commandId === command.id &&
+                kept.text === sent &&
+                kept.conversationId === conversationId
+                    ? kept
+                    : { requestId: uid(), commandId: command.id, text: sent, conversationId };
+            commandRequest.current = request;
+        }
+
         const submitted = drafts.get(conversationId);
 
         setSending(true);
         const ok = await attempt(async () => {
-            await command.run(arg);
+            try {
+                await command.run(arg, request?.requestId);
+            } catch (error) {
+                // A 4xx made no run, or refused it for good: the next send is a new request. After a network error
+                // or a 5xx, the run may be there: the same send finds it.
+                if (error.status >= 400 && error.status < 500) {
+                    commandRequest.current = null;
+                }
+
+                throw error;
+            }
 
             return true;
         });
 
         setSending(false);
+
+        if (ok) {
+            commandRequest.current = null;
+        }
 
         // Preserve edits made while waiting, including the command's own setEditorText effect.
         if (ok && drafts.get(conversationId) === submitted) {
@@ -613,7 +645,7 @@ export function Composer() {
             update(`/${command.name} `);
             focusEnd();
         } else {
-            runCommand({ command, arg: "" });
+            runCommand({ command, arg: "" }, `/${command.name}`);
         }
     };
 
@@ -688,7 +720,7 @@ export function Composer() {
                 remember(full, historyScope);
             }
 
-            return runCommand(parseCommand(full) ?? parsed);
+            return runCommand(parseCommand(full) ?? parsed, full);
         }
 
         if (shell) {

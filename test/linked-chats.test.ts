@@ -37,7 +37,7 @@ const route: Parameters<typeof scriptedModel>[0] = (request, options, _state, mo
     if (text === "start inherited linked test") {
         return fauxAssistantMessage(
             [
-                fauxToolCall("agent_chat", {
+                fauxToolCall("team", {
                     action: "start",
                     title: "Inherited peer",
                     message: "inherited task",
@@ -52,7 +52,7 @@ const route: Parameters<typeof scriptedModel>[0] = (request, options, _state, mo
 
         return fauxAssistantMessage(
             [
-                fauxToolCall("agent_chat", {
+                fauxToolCall("team", {
                     action: "start",
                     title: "Peer investigation",
                     message: "do peer task and report back",
@@ -70,7 +70,7 @@ const route: Parameters<typeof scriptedModel>[0] = (request, options, _state, mo
 
         return fauxAssistantMessage(
             [
-                fauxToolCall("agent_chat", {
+                fauxToolCall("team", {
                     action: "send",
                     chat: origin!,
                     message: "peer findings ready",
@@ -85,7 +85,7 @@ const route: Parameters<typeof scriptedModel>[0] = (request, options, _state, mo
     if (address) {
         return fauxAssistantMessage(
             [
-                fauxToolCall("agent_chat", {
+                fauxToolCall("team", {
                     action: "send",
                     chat: address[1]!,
                     message: "a peer update",
@@ -110,7 +110,7 @@ const route: Parameters<typeof scriptedModel>[0] = (request, options, _state, mo
     }
 
     if (text === "list linked test") {
-        return fauxAssistantMessage([fauxToolCall("agent_chat", { action: "list" })], {
+        return fauxAssistantMessage([fauxToolCall("team", { action: "list" })], {
             stopReason: "toolUse",
         });
     }
@@ -204,7 +204,7 @@ test("the real tool starts a different model at xhigh from an off source, and th
     });
     assert.equal((await app.agentState(target))?.thinkingLevel, "xhigh");
     assert.deepEqual(peerRuns.at(-1), { model: "faux-2", thinking: "xhigh" });
-    assert.match(startupPrompt, /Use agent_chat for task-owner delegation/);
+    assert.match(startupPrompt, /Use team for task-owner delegation/);
     assert.match(startupPrompt, /inherit your model and thinking level when omitted/);
     assert.match(startupPrompt, /governing instructions specifically require a CLI launcher/);
     assert.deepEqual(await app.agentState(id), original);
@@ -247,6 +247,42 @@ test("peer sends default to steer, with explicit steer and follow-up overrides",
     }
 });
 
+test("team retains uncapped starts, peers starting peers, and more than twenty sends", async () => {
+    const id = await source();
+    const peers = [];
+
+    for (let index = 0; index < 12; index++) {
+        peers.push(await start(id, `uncapped-start-${index}`));
+    }
+
+    assert.equal(app.sessions().filter((chat) => chat.linkedFrom?.id === Number(id)).length, 12);
+    const target = peers[0]!;
+    const address = await app.linkedChats.address(id, Number(target));
+
+    for (let index = 0; index < 22; index++) {
+        await say(app, id, `send linked test ${address}`);
+    }
+
+    await until(
+        async () =>
+            (await modelTexts(app, target)).filter(
+                (text) => text.includes("a peer update") && !text.includes("echo:"),
+            ).length === 22,
+        "all twenty-two peer messages accepted",
+    );
+    await say(app, target, "start inherited linked test");
+    const descendants = app.sessions().filter((chat) => chat.linkedFrom?.id === Number(target));
+
+    assert.equal(descendants.length, 1);
+    assert.equal(descendants[0]!.title, "Inherited peer");
+    const tools = (await (await app.conversation(id)).agent(context)).tools.map(
+        (tool) => tool.name,
+    );
+
+    assert.ok(tools.includes("team"));
+    assert.ok(!tools.includes("agent_chat"), "the old name is reserved, not an active alias");
+});
+
 test("agent settings are copied once, not inherited thereafter; plan, budget and archive stay independent", async () => {
     const id = await source();
 
@@ -282,9 +318,11 @@ test("start/send replay reuse chat and submission across restart, including crea
         key,
     );
     const count = app.sessions().length;
+    const address = await app.linkedChats.address(id, Number(target));
 
     await app.close();
     app = await openApp(teamModel(), data);
+    assert.equal(await app.linkedChats.address(id, Number(target)), address);
     assert.equal(await start(id, key), target);
     assert.equal(
         await app.linkedChats.start(id, { title: "Old call", message: "task" }, key),
@@ -411,8 +449,8 @@ test("validation, planning, spend, unrelated/self target and driver checks refus
         /another linked/,
     );
     await app.commands.setPlan(id, owner(app), true);
-    assert.equal(blockedInPlanMode("agent_chat", { action: "list" }), undefined);
-    assert.ok(blockedInPlanMode("agent_chat", { action: "start" }));
+    assert.equal(blockedInPlanMode("team", { action: "list" }), undefined);
+    assert.ok(blockedInPlanMode("team", { action: "start" }));
     await assert.rejects(start(id), /Approve/);
     await assert.rejects(
         app.linkedChats.send(id, Number(target), "hello", false, "planning"),
@@ -615,7 +653,7 @@ test("Agent Teams and Subagents are independent plugins, including across restar
 
     try {
         await app.setExtensionEnabled(owner(app), "subagents.ts", false);
-        assert.ok((await tools(id)).includes("agent_chat"));
+        assert.ok((await tools(id)).includes("team"));
         assert.ok(!(await tools(id)).includes("subagent"));
         await say(app, id, "start linked test");
         const peer = app.sessions(owner(app)).find((chat) => chat.linkedFrom?.id === Number(id));
@@ -624,7 +662,7 @@ test("Agent Teams and Subagents are independent plugins, including across restar
         await app.setExtensionEnabled(owner(app), "subagents.ts", true);
         await app.setExtensionEnabled(owner(app), "agent-teams.ts", false);
         assert.ok((await tools(id)).includes("subagent"));
-        assert.ok(!(await tools(id)).includes("agent_chat"));
+        assert.ok(!(await tools(id)).includes("team"));
         assert.ok(
             app.sessionMeta(peer.id as unknown as ConversationId),
             "disabling the plugin keeps its ordinary chat and links",
@@ -636,16 +674,16 @@ test("Agent Teams and Subagents are independent plugins, including across restar
             false,
         );
         assert.ok((await tools(id)).includes("subagent"));
-        assert.ok(!(await tools(id)).includes("agent_chat"));
+        assert.ok(!(await tools(id)).includes("team"));
         await say(app, id, "spawn nested capability check");
         const child = (await app.harness.snapshot(SubagentsDoc, id, context))!.agents[
             "capability-child"
         ]!.conversationId;
 
         await app.setExtensionEnabled(owner(app), "agent-teams.ts", true);
-        assert.ok((await tools(id)).includes("agent_chat"));
+        assert.ok((await tools(id)).includes("team"));
         assert.ok(
-            !(await tools(child)).includes("agent_chat"),
+            !(await tools(child)).includes("team"),
             "enabling Agent Teams later does not let nested agents delegate",
         );
         assert.ok(!(await tools(child)).includes("subagent"));

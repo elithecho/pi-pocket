@@ -1,5 +1,6 @@
 // App state, the server connection, and API calls. Components read `store.state` and re-render on `store.subscribe`.
 import { onRoute, pushRoute } from "./back.js";
+import { sessionForest } from "./session-tree.js";
 
 /** A random id. crypto.randomUUID only exists on https and localhost pages; plain-http network addresses lack it. */
 export function uid() {
@@ -224,15 +225,19 @@ export function sessionUnread(session, state = store.state) {
 
 /**
  * Sessions in "workspace" order, as Alt+1…9 and the rail number them: pinned ones first (in the order they were
- * pinned), then the rest, newest first. Archived sessions are left out.
+ * pinned), then the rest, newest first, each followed by the linked sessions under it, as the list shows them
+ * (`session-tree.js`). Archived sessions are left out.
  */
 export function workspaceOrder(state = store.state) {
     const active = state.sessions.filter((session) => !session.archived);
-    const pinned = state.pinned
-        .map((id) => active.find((session) => session.id === id))
-        .filter(Boolean);
+    const { roots, rows } = sessionForest(active, { pinned: state.pinned });
+    const family = (root) => rows.get(root.id).map((row) => row.session);
+    const pinned = state.pinned.map((id) => roots.find((root) => root.id === id)).filter(Boolean);
 
-    return [...pinned, ...active.filter((session) => !pinned.includes(session))];
+    return [
+        ...pinned.flatMap(family),
+        ...roots.filter((root) => !pinned.includes(root)).flatMap(family),
+    ];
 }
 
 /** Server features the web app may use. `collab` 2 adds roles, take turns, reactions, pins, notes, mentions, push. */
@@ -1050,6 +1055,9 @@ export const actions = {
     shell: (command, context, requestId = uid()) =>
         api(`c/${current()}/shell`, { command, context, requestId }),
     stopShell: (taskId) => api(`c/${current()}/shell/${taskId}/stop`, {}),
+    /** Run an extension's command; sending the same request id again finds the first run. */
+    extensionCommand: (commandId, args, requestId = uid()) =>
+        api(`c/${current()}/extension-commands`, { commandId, args, requestId }),
     /** A file or folder for the viewer. */
     view: (path) => api(`c/${current()}/view?path=${encodeURIComponent(path)}`),
     /** What changed in the session's folder: git's uncommitted changes, and Pi's edits. */
@@ -1119,9 +1127,17 @@ export const actions = {
 
 /** Entries that show as transcript rows. Tool results show inside their call's card instead. */
 export const isRow = (entry) =>
-    ["user", "assistant", "compaction", "reset", "shell", "note", "fromPi", "extension"].includes(
-        entry.kind,
-    );
+    [
+        "user",
+        "assistant",
+        "compaction",
+        "reset",
+        "shell",
+        "command",
+        "note",
+        "fromPi",
+        "extension",
+    ].includes(entry.kind);
 
 /**
  * Show the transcript from this entry down when it is above the rows shown now, as for a jump to a pinned or quoted

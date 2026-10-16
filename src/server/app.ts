@@ -66,7 +66,9 @@ import {
     TurnsDoc,
 } from "./docs.ts";
 import { describe, HttpError } from "./errors.ts";
+import { ExtensionCommands } from "./extension-commands.ts";
 import { ExtensionWebs, mayUse } from "./extension-web.ts";
+import { defang, quoted } from "./fence.ts";
 import { FolderFavorites } from "./folder-favorites.ts";
 import { Gallery } from "./gallery.ts";
 import { Goals } from "./goals.ts";
@@ -259,6 +261,7 @@ export class PocketApp {
     loader!: ExtensionLoader;
     readonly commands = new Commands(this);
     readonly linkedChats = new LinkedChats(this);
+    readonly extensionCommands = new ExtensionCommands(this);
     readonly collab = new Collab(this);
     readonly alerts = new Alerts(this);
     readonly providers = new Providers(this);
@@ -298,6 +301,8 @@ export class PocketApp {
     #websTimer: NodeJS.Timeout | undefined;
     /** Whose tabs the next `hello` for browser modules goes to: those who may use any of these. */
     readonly #websFor = new Set<WebAccess>();
+    /** Whether everyone's tabs must hear `hello` again, for a change to the modules' commands. */
+    #websAll = false;
     readonly #clients = new Set<Client>();
     readonly #rooms = new Map<ConversationId, Promise<Room>>();
     readonly #envs = new Map<string, NodeExecutionEnv>();
@@ -388,6 +393,8 @@ export class PocketApp {
                     }
                 }
             },
+            // Everyone's tabs hear the new list in `hello`: commands are for guests too, not by a browser module's access.
+            commandsChanged: () => this.#websChanged("all"),
             log: (line) => this.#log(line),
             // Something about a module only the owner can mend: their tabs, as what it says can name the server's folders.
             warn: (message) => this.ownerNotice("warning", message),
@@ -398,13 +405,17 @@ export class PocketApp {
      * Browser modules came, went, or changed: the tabs of the people they are for hear which to load, once for changes
      * that come together.
      */
-    #websChanged(access: readonly WebAccess[]): void {
+    #websChanged(access: readonly WebAccess[] | "all"): void {
         if (this.#closing !== undefined) {
             return;
         }
 
-        for (const each of access) {
-            this.#websFor.add(each);
+        if (access === "all") {
+            this.#websAll = true;
+        } else {
+            for (const each of access) {
+                this.#websFor.add(each);
+            }
         }
 
         if (this.#websTimer !== undefined) {
@@ -413,10 +424,12 @@ export class PocketApp {
 
         this.#websTimer = setTimeout(() => {
             const changed = [...this.#websFor];
+            const all = this.#websAll;
 
             this.#websTimer = undefined;
             this.#websFor.clear();
-            void this.#refreshClients((user) => changed.some((each) => mayUse(user, each)));
+            this.#websAll = false;
+            void this.#refreshClients((user) => all || changed.some((each) => mayUse(user, each)));
         }, 50);
     }
 
@@ -466,7 +479,12 @@ export class PocketApp {
         registry.install(
             defineExtension({
                 name: "pocket-core",
-                tasks: [ResendTask, this.shell.task, this.commands.followTask],
+                tasks: [
+                    ResendTask,
+                    this.shell.task,
+                    this.commands.followTask,
+                    this.extensionCommands.task,
+                ],
             }),
         );
         const host: PocketHost = {
@@ -500,6 +518,8 @@ export class PocketApp {
             repoWatches: this.repoWatches,
             memory: this.memory,
             gallery: this.gallery,
+            text: Object.freeze({ quoted, defang }),
+            thinkingLevels: THINKING_LEVELS,
         };
 
         this.host = host;
@@ -1680,8 +1700,17 @@ export class PocketApp {
                 defaultCwd: this.defaultCwd,
                 extensions: this.loader.extensionNames(),
                 extensionRevision: this.#extensionRevision,
-                // The browser modules this person's tabs load (`extension-ui.js`).
-                ui: this.webs.clients(user),
+                // The browser modules this person's tabs load (`extension-ui.js`), each with the tools its module
+                // installs: the only ones whose calls it may describe (`pocket.toolCall`).
+                ui: this.#browserModules(user),
+                // The commands this person may run: viewers none, guests the ones for conversations.
+                extensionCommands: this.webs
+                    .commands()
+                    .filter(
+                        (command) =>
+                            user.role === "owner" ||
+                            (user.role === "guest" && command.scope === "conversation"),
+                    ),
                 // Tells the web app this server has people chat and typing indicators.
                 chat: true,
                 // Manual refresh reloads shared model configuration and catalogs; only the owner may start it.
@@ -1708,6 +1737,21 @@ export class PocketApp {
             // Read after the guard's wait, so a connecting device does not replace a live update with an older list.
             folderFavorites: await this.folderFavorites.list(user),
         };
+    }
+
+    #browserModules(user: User) {
+        const tools = new Map(
+            this.loader
+                .list()
+                .map((each) => [
+                    each.file.replace(/\.ts$/, ""),
+                    each.extensions.flatMap((extension) => extension.tools),
+                ]),
+        );
+
+        return this.webs
+            .clients(user)
+            .map((each) => ({ ...each, tools: tools.get(each.module) ?? [] }));
     }
 
     /** A tab's hello: what everyone gets, and the id of its own connection, which its peek lists name. */

@@ -1063,7 +1063,7 @@ export function SessionList({ compact = false }) {
                 // A folded group hides its rows' marks: say when one waits for you or its run failed.
                 const trouble = isClosed
                     ? group.rows
-                          .map((row) => sessionMark(row).shape)
+                          .map((row) => sessionMark(row.session).shape)
                           .find((shape) => shape === "waiting" || shape === "failed")
                     : undefined;
 

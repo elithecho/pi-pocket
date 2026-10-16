@@ -269,7 +269,7 @@ export function blockedInPlanMode(
         return undefined;
     }
 
-    if (tool === "agent_chat" && args.action === "list") {
+    if (tool === "team" && args.action === "list") {
         return undefined;
     }
 

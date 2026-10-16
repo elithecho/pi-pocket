@@ -1,6 +1,6 @@
 # Writing extensions
 
-An extension gives Pi something new: a **tool** it can call, a **section** of its system prompt, a **hook** that checks or changes its tool calls and answers, or a durable **task**. It can also add to the app itself: **routes** on the server, and a **browser module** with rail buttons, pages, sheets, menu rows, and launcher actions ([Adding to the app](#adding-to-the-app)). Pi Pocket's own features are built this way (`src/server/extensions/`), and the owner can add their own without touching Pi Pocket's code.
+An extension gives Pi something new: a **tool** it can call, a **section** of its system prompt, a **hook** that checks or changes its tool calls and answers, or a durable **task**. It can also add to the app itself: **routes** on the server, a **browser module** with rail buttons, pages, sheets, menu rows, and launcher actions, and **commands** people run from the message box without asking Pi ([Adding to the app](#adding-to-the-app)). Pi Pocket's own features are built this way (`src/server/extensions/`), and the owner can add their own without touching Pi Pocket's code.
 
 Extensions are Pi Durable's. Its README covers the parts in depth: `node_modules/@earendil-works/pi-durable/README.md` in Pi Pocket's folder (Extensions, Tools, System Prompt, Hooks, Your Own State). This page is what Pi Pocket adds, and how to write one that holds up.
 
@@ -20,7 +20,7 @@ Drop-ins other people wrote come from the gallery, and the owner's own go to it 
 
 ## A module
 
-One `.ts` file that default-exports a function. Pi Pocket calls it with the host (below) and `web` (what it adds to the app, [below](#adding-to-the-app)), and installs what it returns: one extension, a list, or nothing, for a module that only adds to the app. It may be `async`: the module is loaded once it settles, and may register with `web` until then. It installs all it returns or none of it: when one extension is refused, the version before stays as it was. An extension without a name, or two of one name, are refused, and so is a module that returns nothing and adds nothing to the app (no route, browser module, or cleanup), as it most likely forgot to return its extensions.
+One `.ts` file that default-exports a function. Pi Pocket calls it with the host (below) and `web` (what it adds to the app, [below](#adding-to-the-app)), and installs what it returns: one extension, a list, or nothing, for a module that only adds to the app. It may be `async`: the module is loaded once it settles, and may register with `web` until then. It installs all it returns or none of it: when one extension is refused, the version before stays as it was. An extension without a name, or two of one name, are refused, and so is a module that returns nothing and adds nothing to the app (no route, browser module, command, or cleanup), as it most likely forgot to return its extensions.
 
 ```typescript
 /**
@@ -52,7 +52,7 @@ export default function createClock() {
 
 Working examples, tested with every `npm test` (`test/docs-examples.test.ts`):
 
-- [examples/clock.ts](examples/clock.ts): a tool.
+- [examples/clock.ts](examples/clock.ts): a tool, and a command (`/clock-zone`) that sets the time zone it uses in a session.
 - [examples/no-force-push.ts](examples/no-force-push.ts): a hook that blocks some bash calls, and a prompt section that says so.
 - [examples/server-status.ts](examples/server-status.ts) with [examples/server-status.js](examples/server-status.js): a page on the rail, with a route that reads the machine's load and memory, and events that keep it live.
 
@@ -68,7 +68,7 @@ The file:
 Installing an extension with a name already installed replaces it, and a tool with the name of another replaces it in every session. So Pi Pocket refuses a drop-in that would take a name it keeps for itself, or one another module already has, and says so in Menu → Extensions:
 
 - Extension names `coding-tools`, `pocket-core`, and anything starting with `pocket-` (`pocket-prompt`, `pocket-guard`, and the rest), whether that built-in is on or off.
-- The built-in tools: `read`, `write`, `edit`, `bash`, `artifact`, `browser`, `subagent`, `agent_chat`, `schedule`, `codemode`, and `memory`, and PiP's: `sessions`, `session_read`, `session_start`, `session_send`, `session_follow`, `session_stop`, `session_archive`, `session_schedule`, `approvals`, `repo_watch`, and `session_watch_pr`, and the triggers' `watch_pr`.
+- The built-in tools: `read`, `write`, `edit`, `bash`, `artifact`, `browser`, `subagent`, `team`, `schedule`, `codemode`, and `memory`, and PiP's: `sessions`, `session_read`, `session_start`, `session_send`, `session_follow`, `session_stop`, `session_archive`, `session_schedule`, `approvals`, `repo_watch`, and `session_watch_pr`, and the triggers' `watch_pr`.
 - An extension or tool name another module installed: the first one in keeps it.
 
 Give every extension and tool a name of your own, with a prefix (`example-clock`, `acme_lookup`). To change how a built-in tool works, wrap it (`wrapTool` in Pi Durable's README) or check its calls with a hook, rather than replacing it.
@@ -119,44 +119,63 @@ Sections render before every request, and only those that changed are sent again
 
 What the default export receives first. Extensions reach the app only through it (and add to it through `web`, [above](#adding-to-the-app)); it stays the same while modules reload.
 
-| Member                           | What it is                                                                                                                    |
-| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `dataDir`, `agentDir`            | Pi Pocket's data folder; Pi's (`~/.pi/agent`)                                                                                 |
-| `notice(level, message, id?)`    | Report something to the server log and the app (`"info"`, `"warning"`, `"error"`); with a conversation's id, to its tabs only |
-| `resolveModel(spec)`             | `provider/modelId` (or a bare id) to a signed-in model whose sign-in works, or an error that names no other models            |
-| `subagentModels()`               | The models the owner allows subagents besides their session's own (`provider/modelId`); empty by default                      |
-| `modelProblem(ref, fresh?)`      | Why a model may not be used now (not signed in, its sign-in expired), or `undefined`; `fresh` asks its provider again         |
-| `requesterOf(conversationId)`    | The id of the person Pi works for in a session now                                                                            |
-| `skillPaths()`                   | The extra skill folders in Pi's settings                                                                                      |
-| `skills(cwd)`                    | Pi's skills for a session working in `cwd`, from every place Pi looks                                                         |
-| `heldBack(conversationId)`       | Why work Pi would start there with nobody asking may not start now (a spend limit), or `undefined`                            |
-| `onLimitsChanged(listener)`      | Call `listener` when the owner changes a spend limit; returns how to stop                                                     |
-| `approvals`, `guard`             | Calls waiting for a person to allow them; Lancet Guard                                                                        |
-| `schedules`, `goals`, `browsers` | Scheduled messages, Done when, and the built-in browser, as their extensions use them                                         |
-| `linkedChats`                    | Normal linked chats: inherited model/thinking with optional startup overrides, list and send; check `modelSelection`          |
-| `memory`                         | Lessons Pi keeps across sessions: their projects, the ones in force, saving and changing them                                 |
-| `watches`                        | Sessions' PR watches: starting, stopping, and reading one, and the task that looks                                            |
-| `repoWatches`                    | Repository watches' task, which the triggers extension installs                                                               |
-| `gallery`                        | The extension gallery, which its extension's routes use ([below](#the-gallery))                                               |
+| Member                           | What it is                                                                                                                                                                               |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `dataDir`, `agentDir`            | Pi Pocket's data folder; Pi's (`~/.pi/agent`)                                                                                                                                            |
+| `notice(level, message, id?)`    | Report something to the server log and the app (`"info"`, `"warning"`, `"error"`); with a conversation's id, to its tabs only                                                            |
+| `resolveModel(spec)`             | `provider/modelId` (or a bare id) to a signed-in model whose sign-in works, or an error that names no other models                                                                       |
+| `subagentModels()`               | The models the owner allows subagents besides their session's own (`provider/modelId`); empty by default                                                                                 |
+| `modelProblem(ref, fresh?)`      | Why a model may not be used now (not signed in, its sign-in expired), or `undefined`; `fresh` asks its provider again                                                                    |
+| `requesterOf(conversationId)`    | The id of the person Pi works for in a session now                                                                                                                                       |
+| `skillPaths()`                   | The extra skill folders in Pi's settings                                                                                                                                                 |
+| `skills(cwd)`                    | Pi's skills for a session working in `cwd`, from every place Pi looks                                                                                                                    |
+| `heldBack(conversationId)`       | Why work Pi would start there with nobody asking may not start now (a spend limit), or `undefined`                                                                                       |
+| `onLimitsChanged(listener)`      | Call `listener` when the owner changes a spend limit; returns how to stop                                                                                                                |
+| `approvals`, `guard`             | Calls waiting for a person to allow them; Lancet Guard                                                                                                                                   |
+| `schedules`, `goals`, `browsers` | Scheduled messages, Done when, and the built-in browser, as their extensions use them                                                                                                    |
+| `linkedChats`                    | Independent linked chats: `start`, `send`, `list`, `address`; check `modelSelection` ([below](#starting-and-messaging-chats))                                                            |
+| `memory`                         | Lessons Pi keeps across sessions: their projects, the ones in force, saving and changing them                                                                                            |
+| `watches`                        | Sessions' PR watches: starting, stopping, and reading one, and the task that looks                                                                                                       |
+| `repoWatches`                    | Repository watches' task, which the triggers extension installs                                                                                                                          |
+| `gallery`                        | The extension gallery, which its extension's routes use ([below](#the-gallery))                                                                                                          |
+| `text`                           | Text from elsewhere made safe for Pi to read: `quoted(text, max)`, one line in quotes it cannot close; `defang(text)`, with no closing tag left in it, for text between tags of your own |
+| `thinkingLevels`                 | The thinking levels, lowest first, as models and sessions name them                                                                                                                      |
 
 Modules reload into the running server, but the server's own part (the host among it) changes only with a restart. A module that uses a member new to the host must work without it until then: check that it is there (`typeof host.heldBack === "function"`) and do as before when it is not. A module that called a missing member would fail at its first use, in every session.
 
 To type it, import the type by the absolute path of `src/server/host.ts`: `import type { PocketHost } from "/path/to/pi-pocket/src/server/host.ts";`. A type import is gone when the module runs, so the path only matters to the type checker.
 
+## Starting and messaging chats
+
+This fork keeps `host.linkedChats` as its sole messaging service. Agent Teams exposes it as `team`
+(formerly `agent_chat`), with the existing `chat` argument for sends. Check
+`host.linkedChats?.modelSelection === true` before using startup route overrides.
+
+- `start(source, { title, message, model?, thinking? }, key)` creates a normal ownerless chat and returns its conversation id. It copies agent settings once, not history, budget, or plan mode. Omitted model/thinking inherit; a model-only override adjusts inherited thinking to a supported level, while explicit thinking must be supported exactly, without a source cap or subagent model allowlist. Unavailable routes create nothing.
+- `address(source, target)` returns a stable source-local opaque address for a visible peer.
+- `send(source, target, message, steer, key)` accepts that address (or an internal id) and delivers through `Commands.submit`. The `team` tool defaults to `steer: true`; `false` queues a follow-up. The tool sends the first message after creation and reports the address if delivery fails, so callers retry that peer rather than create another.
+- `list(source)` returns the visible family with `handle` addresses; it includes title, folder and status only when every source viewer may see that peer.
+
+Starts and sends act as the source requester and retain normal access, driver, plan and per-chat/person spend checks. Chats have independent budgets and may start other peers; this fork does not impose the upstream relay, session-count, or one-level team caps. Nothing replies automatically. Peer text is fenced and does not dispatch slash commands.
+
+Use stable call keys such as `${api.taskId}:${api.callId}`. Existing `pocket.linked-chat-peers` addresses and `pocket.linked-chat-call` receipts remain unchanged, including across restart. A fork starts with no peer addresses. The old tool name remains reserved against drop-in takeover, but is not an active tool.
+
 ## Rules that are easy to break
 
 - **Nothing twice.** A restart can run a hook or a safe tool again. Anything that must happen once (a message sent, money spent, a file appended to) goes behind `api.memo` or a key that makes a repeat find the first.
 - **No surprise state.** Keep state in Pi Durable documents or memos, not in variables: a reload starts the module over, and a restart starts the process over.
+- **Your documents are stored data.** Name a document kind after your module (`x.<module>.<name>`, as `x.word-count.totals`), so no other module's ever meets it, and your tasks' names and entries' kinds too. Once anyone has run it, never rename a kind or a name, or change what its fields mean: add new ones beside them.
 - **Do not block.** Tools run in the server process: use async file and process calls, never `execSync` or a busy loop. A slow tool holds up only its call; a blocked event loop holds up everyone.
 - **Do not get around a block.** A guard or a person said no for a reason.
 - **Secrets stay out.** Text in a section, a tool's description, or a result goes to the model provider.
 
 ## Adding to the app
 
-A module can add to the app what a tool cannot: a page that shows something without asking Pi, a button on the rail, a row in the menu. Its default export's second argument, `web`, registers two parts while the module loads:
+A module can add to the app what a tool cannot: a page that shows something without asking Pi, a button on the rail, a row in the menu. Its default export's second argument, `web`, registers three parts while the module loads:
 
 - **Routes** on the server, under `/api/x/<module>/`: what the browser module calls. Credentials and other secrets stay here.
-- A **browser module**: a `.js` file the app loads in the tabs of the people it is for. It adds rail buttons, pages, sheets, menu rows, and launcher actions through `pocket`, the app's API for extensions.
+- A **browser module**: a `.js` file the app loads in the tabs of the people it is for. It adds rail buttons, pages, sheets, menu rows, and launcher actions, and says how its tools' calls show, through `pocket`, the app's API for extensions.
+- **Commands** for the message box (`/name`), which run on the server and need no browser module ([below](#commands)).
 
 They install and go with the module's extensions: an edit swaps them in one step, a version that fails keeps the one before, and turning the module off removes them, closing a page of it that is open. [examples/server-status.ts](examples/server-status.ts) and [examples/server-status.js](examples/server-status.js) are a whole one.
 
@@ -168,6 +187,16 @@ export default function createUsage(_host: unknown, web: ExtensionWeb) {
     web.client("usage.js"); // the browser module beside this file
 }
 ```
+
+| `web`                                 | What it is                                                               |
+| ------------------------------------- | ------------------------------------------------------------------------ |
+| `api`, `module`                       | The version of this API (1); the module's name, its file's without `.ts` |
+| `route(method, path, handle, access)` | A route under `/api/x/<module>/` ([Routes](#routes))                     |
+| `client(entry, access)`               | The browser module ([The browser module](#the-browser-module))           |
+| `command(name, { … })`                | A command for the message box ([Commands](#commands))                    |
+| `send(event, data, { to })`           | An event to the browser module ([Events](#events))                       |
+| `error(status, message)`              | An error a route throws to answer with its status and words              |
+| `onDispose(run)`                      | Run `run` when this version goes ([Cleanups](#cleanups))                 |
 
 ### Routes
 
@@ -232,6 +261,7 @@ export default function setup(pocket) {
 | `api(path, body?, { method, signal })`                                | Call one of the module's routes: a GET without `body`, a POST with one; a query string in `path` reaches `query`. `signal` stops it. Rejects with an error with the server's words (and its `status`), or at once for a path that would leave the module's routes: a `.` or `..` part, a leading `//`, or a scheme |
 | `on(event, run)`                                                      | Hear an event the module sends; returns how to stop                                                                                                                                                                                                                                                                |
 | `rail`, `menu`, `launcher`, `page`, `sheet`                           | Add a button on the rail, a row in the menu, a launcher action, a page, or a sheet (below). Each returns `{ update(patch), remove() }`                                                                                                                                                                             |
+| `toolCall({ tool, icon or iconPath, label, subject, summary })`       | Say how calls of one of the module's tools show in transcripts and peek tiles (below). Returns `{ remove() }`                                                                                                                                                                                                      |
 | `openPage(id)`, `closePage()`, `openSheet(id, props)`, `closeSheet()` | Show or close the module's own page or sheet; a sheet's component gets `props` (an object). Opening a page closes the sheet or launcher over it. A version that is gone or failed opens and closes nothing                                                                                                         |
 | `notify(level, message)`                                              | A notice, as the app's own: `info`, `warning`, or `error`. At most 5 every 5 s for a module, its versions together (its failing actions and stylesheets count too); the rest are dropped. A version that is gone or failed sends none                                                                              |
 | `me()`, `conversationId()`                                            | Who uses this tab (`{ id, name, role }`); the session it shows, or null                                                                                                                                                                                                                                            |
@@ -250,6 +280,7 @@ A new function or array given each time counts as a change each time. A loop tha
 - Each of those three does one thing when used: `page: "id"` opens a page, `sheet: "id"` a sheet (the id of one the module adds), `run: () => …` runs a function. A rail button that opens a page shows it is open, and closes it on a second tap. Modules' buttons, rows, and actions show in the order the server lists the modules, and an edit keeps a module's place.
 - `page({ id, title, component, escape, swipe })` shows in the conversation's place, as the subagents board does, with its title and a close button; Esc and back close it, and on a phone it fills the screen. On a touch screen up to 699 px wide a swipe to the right on it goes back (not in a field or a sideways scroller), and in an app added to an iPhone's or iPad's home screen so does a swipe in from the left edge. `escape: false` keeps Esc for the page (Esc still closes a sheet, the launcher, or PiP over it; the close button and back still close the page). `swipe: false` starts no back swipe anywhere on the page, the edge's included, and a `data-no-swipe` attribute on an element starts none on it or in it (a slider, a canvas you draw on). Esc never closes it while an input method composes a character.
 - `sheet({ id, title, component, wide })` is a sheet like the app's. Their components get `pocket` and `close`, and a sheet's the `props` it was opened with. `close` closes only that page or sheet, of that version, while it shows: kept for later, it closes nothing else (`pocket.closePage()` closes whichever page of the module shows). A page or sheet whose module never added that id says the module no longer has it.
+- `toolCall({ tool, icon or iconPath, label, subject, summary })` says how calls of one of the module's own tools show, by their arguments. Without it, a tool's call shows as its name and its arguments as JSON. `label(args)` gives the call's line its words (`"start session"`), `subject(args)` what it acts on, and `summary(args)` how a group of calls counts it, as `{ verb, noun, by }`: calls count by the value of their `by` argument, so `{ verb: "messaged", noun: "session", by: "to" }` makes "messaged 2 sessions" for calls to two addresses, however many there are; a kind without `noun` is only its verb ("checked linked sessions"). `icon` or `iconPath` is its icon in peek tiles, as a rail button's. Each gets a copy of the arguments, and what it gives shows as one line of text, never HTML. One that throws, or gives something else than text (or such a kind), leaves the call to the default display; its error is in the browser's console. `tool` must be one the module's own extensions install, by the exact name Pi runs it by (the server lists them with the browser module): any other is refused, so no module changes how another's calls show. From a server older than that list, it does nothing, and calls show the default way. It goes with the version that added it.
 
 The pieces take what the app's own do: `Icon({ name or path, size })`, `Loader({ label })`, `Spinner({ label })`, `Markdown({ text })`, `Switch({ on, label, onChange, disabled })`. To look like the app, use its colors, `var(--text)`, `var(--muted)`, `var(--accent)`, `var(--bg)`, `var(--card)`, `var(--line)`, `var(--err)`, `var(--warn)`, and `var(--ok)`, which follow the theme, and these classes: `button` (with `primary`), `error-box`, `muted`, `small`, `mono`, and `setting` (a row with a label and a control). Pi Pocket keeps those names; the rest of its CSS may change.
 
@@ -279,6 +310,43 @@ Someone invited to one session never may: these belong to the whole app. Each ro
 
 At most 100 events, and 1 MB of them, go out each second for a version of a module; the rest of that second's are dropped. Send what changed, or a summary, not every tick. A tab more than 8 MB behind that takes nothing for 30 s (it does not read its stream, or polls and acknowledges nothing), or any tab more than 128 MB behind, is cut off, and connects again with a fresh view: events are not kept for it. Under 128 MB, a tab that keeps taking is not cut off for being behind, so a slow phone gets everything. `web.send` never throws, as it is mostly called from timers, where a throw would stop the server: an event it cannot send goes to the server's log, once for each kind of mistake in a version.
 
+### Commands
+
+`web.command(name, { description, args, scope, handler })` adds `/name` to the message box's suggestions, for the people who may run it. It runs on the server and does not ask Pi. The [clock example](examples/clock.ts) has one: `/clock-zone Europe/Berlin` sets the session's time zone, and `/clock-zone` shows it.
+
+```typescript
+web.command("acme-status", {
+    description: "Show this session's folder",
+    scope: "conversation",
+    handler: (_args, ctx) => ({ type: "card", output: ctx.cwd }),
+});
+```
+
+- `name` is up to 64 lowercase letters, digits, `-`, and `_`, starting with a letter, without the `/`, and has at least one `-`: `acme-status`, not `status`. The app's own commands are one word each, so a new one never takes your name. Give it a prefix of your own. A name another module's command has is refused: the first one in keeps it. A prompt template with the same name wins in the message box.
+- `description` shows in the suggestions. `args` is an optional hint in words, such as `"[zone]"`. Each is 200 characters at most, and a module has 50 commands at most.
+- `handler(args, ctx)` gets everything after the name as one string (up to 4000 characters). `ctx.user` is who ran it (`{ id, name, role }`), `ctx.conversationId` and `ctx.cwd` the session and its folder. Read a document with `ctx.snapshot(Doc, ctx.conversationId, ctx.context)`, and change documents with `await ctx.commit(async (tx) => …)`, which answers what its function returns; keep work outside Pi Pocket out of the commit.
+
+What it returns:
+
+- `{ type: "toast", level, message }`: a notice (`"info"`, `"warning"`, or `"error"`) for the person who ran it, in that tab alone. A message is cut to 500 characters.
+- `{ type: "card", output }`: plain text in the session the command was typed in, for everyone who sees it. Pi never gets it, and it does not change whom Pi works for. Find in session and export include it. Only its last 30,000 characters are kept, as for a `!` command. Put no secrets in it.
+
+To refuse, throw `web.error(status, message)` (or let the app's own errors through): the person who ran it reads `message`. Any other throw tells them only "The command failed.", and the owner gets its words in a notice, as they can name the server's folders or quote a secret.
+
+A conversation command is offered to everyone who can steer that session, people invited to only that session included, and its handler runs with the owner's rights, as all of the module does. Its `args` are untrusted text: check them, and check `ctx.user.role` and `ctx.conversationId` before you change anything beyond that session.
+
+Who may run it (`scope`):
+
+- `"conversation"`: anyone who may steer the session, and only whoever drives while people take turns. Guests invited to one session may run it there.
+- `"global"`: the owner alone, in any session they see. While someone else drives, the app shows the owner no message box there, so they run it from another session or take the wheel first. Use it for settings of the whole app. Its card still goes to the session it was typed in, for everyone there.
+- Viewers run none, and see none in the suggestions.
+
+Each run is a durable task, kept by who ran it, the session, and the request's id. When a reply gets lost, sending the same text again from the same tab finds the first run and gets its result: the handler runs once. A server restart never runs a handler again: the person hears that it was cut off, as it may have done part of its work. Menu → **Running now** shows a command while it runs, and stops it: steerers stop conversation commands, the owner global ones. Stopping aborts `ctx.signal` and does not undo what the handler did; a stop that comes just after the card was written leaves the card, and the run says it was stopped.
+
+There is no time limit: a handler must watch `ctx.signal` and end when it aborts. One person may have 4 runs going at once, over every session; a fifth is refused until one ends, so a handler that never ends holds one of them until the server restarts. The arguments and the result are stored with the task, so a command is no place to type a password.
+
+Commands install and go with the module's version, as routes do: an edit swaps them in one step, a version that fails keeps the ones before, and turning the module off removes them. A run that started keeps the handler it started with. Menu → **Extensions** lists a module's commands, each with its scope.
+
 ### Cleanups
 
 `web.onDispose(run)` runs `run` when this version of the module goes: an edit replaces it, the owner turns it off, or the server stops. Stop timers and close connections there: a reload starts the module over, and the old version's timers would otherwise run on. One registered after the module loaded (from a timer) runs too, and one registered after the version went runs at once. `run` may return a promise: when the server stops, it waits up to 3 s for those, the cleanups of versions still going (replaced or turned off a moment before) and of a version still loading included. `pocket.onDispose` does the same in the browser, but a browser cleanup is not waited for: do what must finish at once.
@@ -287,11 +355,13 @@ The new version starts before the old one's cleanups run, so that an edit that f
 
 ### Versions
 
-`web.api` and `pocket.version` are the version of this API, 1 now. It goes up only when something a module uses changes in a way that breaks it; additions keep it. A module that exports `pocketApi` (the server module, the browser module, or both) is not set up by a Pi Pocket with an older version of this API, which says so instead. The browser checks it after importing the module, so keep a browser module's top level to declarations, and do its work in the default export. A Pi Pocket from before this API knows neither `pocketApi` nor `web`: a module that adds to the app fails there at its first `web.route` or `web.client`, with the error in the Extensions sheet.
+`web.api` and `pocket.version` are the version of this API, 1 now. It goes up only when something a module uses changes in a way that breaks it; additions keep it. A module that exports `pocketApi` (the server module, the browser module, or both) is not set up by a Pi Pocket with an older version of this API, which says so instead. The browser checks it after importing the module, so keep a browser module's top level to declarations, and do its work in the default export. A Pi Pocket from before this API knows neither `pocketApi` nor `web`: a module that adds to the app fails there at its first `web.route` or `web.client`, with the error in the Extensions sheet. `web.command` is newer than the rest of `web`: a module that should also load on Pi Pocket before 0.14.0 checks `typeof web.command === "function"` first.
 
 ## Testing
 
 Copy the module into a test app's data folder and turn it on, as `test/docs-examples.test.ts` does: `openApp` with a scripted model (`test/helpers.ts`), the file in `<dataDir>/extensions/`, `app.setExtensionEnabled(owner, file, true)`, then a session whose scripted model calls the tool. Nothing reaches a real provider, and nothing touches the live data.
+
+`test/extension-commands.test.ts` runs a module's commands as different people, across a restart and a reload.
 
 For a drop-in, run the test from Pi Pocket's folder with the module copied in, or check it by hand: turn it on, ask Pi to use it in a session made for the purpose, and watch Menu → Extensions and the app's notices for errors.
 
@@ -315,14 +385,15 @@ Before turning one on, read it: the gallery shows every file, and what its entry
 
 ### What an entry declares
 
-| Field                        | What                                                                                                                                            |
-| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `extensions`                 | The names of the extensions it installs                                                                                                         |
-| `tools`, `readOnlyTools`     | Its tools, and those of them with `readOnlyHint` (plan mode lets them run)                                                                      |
-| `hooks`                      | Its hooks' handlers: `beforeTool`, `onYield`, …                                                                                                 |
-| `sections`                   | Its prompt sections                                                                                                                             |
-| `wraps`                      | The tools and sections it wraps: `tool bash`, `section memory`                                                                                  |
-| `routes`, `client`, `access` | Its routes (`GET status`), who loads its browser module (or `null`), and the widest access of the two (`owner` when it adds nothing to the app) |
+| Field                        | What                                                                                                                                                                                                     |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `extensions`                 | The names of the extensions it installs                                                                                                                                                                  |
+| `tools`, `readOnlyTools`     | Its tools, and those of them with `readOnlyHint` (plan mode lets them run)                                                                                                                               |
+| `hooks`                      | Its hooks' handlers: `beforeTool`, `onYield`, …                                                                                                                                                          |
+| `sections`                   | Its prompt sections                                                                                                                                                                                      |
+| `wraps`                      | The tools and sections it wraps: `tool bash`, `section memory`                                                                                                                                           |
+| `routes`, `client`, `access` | Its routes (`GET status`), who loads its browser module (or `null`), and the widest access of the two (`owner` when it adds nothing to the app)                                                          |
+| `commands`                   | Its slash commands, each with its scope, as a route has its method: `conversation clock-zone`, `global clock-reset`. Left out when it has none: a Pi Pocket before 0.14.0 does not read an entry with it |
 
 These are what Menu → Extensions shows for a module that is on, and the index's checks load the module in a test app and compare.
 

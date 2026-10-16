@@ -81,6 +81,7 @@ export default function(pi) {
         ctx.ui.setWidget("above", ["Above widget"]);
         ctx.ui.setWidget("below", ["Below widget"], { placement: "belowEditor" });
     }});
+    pi.registerCommand("portable-note", { description: "Terminal collision fixture", handler: async (args) => pi.appendEntry("portable-note", { args }) });
     pi.registerCommand("model", { handler: async (_, ctx) => ctx.ui.setStatus("collision", "Plugin model ran") });
     pi.registerCommand("question", { handler: async (kind, ctx) => {
         let answer;
@@ -598,6 +599,94 @@ test(
             page.logs().filter((line) => line.level === "error"),
             [],
         );
+    },
+);
+
+test(
+    "native web commands coexist with terminal commands and retain receipts and edited drafts",
+    real,
+    async () => {
+        await page.navigate(`${base}/s/${id}`);
+        await see(`document.querySelector('.composer textarea') !== null`, "composer ready");
+        writeFileSync(
+            join(app.dataDir, "extensions", "native-notes.ts"),
+            `/** Native command fixture. */
+let count = 0;
+export default (_host, web) => {
+    web.command("native-note", { description: "Native note", args: "[message]", scope: "conversation",
+        handler: async (args) => ({ type: "card", output: "Native " + (++count) + ": " + args }) });
+    web.command("portable-note", { description: "Must not replace terminal command", args: "[message]", scope: "conversation",
+        handler: async () => { throw new Error("Wrong command won the collision"); } });
+};`,
+        );
+        await app.setExtensionEnabled(owner(app), "native-notes.ts", true);
+        await type("/native-");
+        await see(
+            `(await import('/commands.js')).parseCommand('/native-note once') !== null && (await import('/commands.js')).parseCommand('/portable-note collision')?.command.actualName === 'portable-note'`,
+            "both command catalogues and terminal collision precedence",
+        );
+        const calls = provider.state.callCount;
+
+        await send("/portable-note collision");
+        await until(
+            async () =>
+                (await state()).some(
+                    ({ sdk }) => sdk.type === "custom" && sdk.customType === "portable-note",
+                ),
+            "terminal command wins the collision",
+        );
+        await see(
+            `document.querySelector('.composer textarea').value === ''`,
+            "terminal command settled",
+        );
+        await page.evaluate(`window.nativeOriginalFetch = window.fetch; let lose = true;
+            window.fetch = async (...args) => {
+                const response = await window.nativeOriginalFetch(...args);
+                if (lose && String(args[0]).endsWith('/extension-commands')) {
+                    lose = false;
+                    throw new Error('Lost native reply');
+                }
+                return response;
+            };`);
+        await send("/native-note once");
+        await see(
+            `(await import('/store.js')).store.state.notices.some(n => n.message.includes('Lost native reply'))`,
+            "native reply lost",
+        );
+        await send("/native-note once");
+        await see(`document.querySelector('.composer textarea').value === ''`, "native retry done");
+        assert.equal(
+            await evaluate<number>(
+                `return JSON.stringify([...document.querySelectorAll('.shell-card .output')].filter(e => e.textContent === 'Native 1: once').length)`,
+            ),
+            1,
+        );
+
+        await page.evaluate(`window.fetch = async (...args) => {
+            const response = await window.nativeOriginalFetch(...args);
+            if (String(args[0]).endsWith('/extension-commands')) {
+                await new Promise(resolve => { window.releaseNativeReply = resolve; });
+            }
+            return response;
+        };`);
+        await send("/native-note edited");
+        await see(`typeof window.releaseNativeReply === 'function'`, "native response held");
+        await type("Keep this newer draft");
+        await page.evaluate(
+            `window.releaseNativeReply(); window.fetch = window.nativeOriginalFetch;`,
+        );
+        await see(
+            `document.querySelector('.composer button[aria-label="Send"]')?.disabled === false`,
+            "send settled",
+        );
+        assert.equal(
+            await evaluate<string>(
+                `return JSON.stringify(document.querySelector('.composer textarea').value)`,
+            ),
+            "Keep this newer draft",
+        );
+        assert.equal(provider.state.callCount, calls);
+        await type("");
     },
 );
 

@@ -421,7 +421,9 @@ function PeekLine({ line }) {
             const call = describeCall({ name: line.name, args: line.args });
 
             return html`<div class="peek-line cmd">
-                <span class="peek-mark">${call.icon}</span>
+                <span class="peek-mark">
+                    ${call.iconPath ? html`<${Icon} path=${call.iconPath} size=${12} />` : call.icon}
+                </span>
                 <span class="peek-text">
                     ${call.label} ${call.subject}${" "}
                     <${Status} status=${line.status} />

@@ -452,6 +452,20 @@ export const BrowserDoc = defineDoc<{
 });
 
 /**
+ * The extensions' commands one person ran here, keyed by the person's id: each request id with its task, oldest first.
+ * A request sent again, also after a restart, finds its task. A fork starts without them.
+ */
+export const CommandRequestsDoc = defineDocFamily<{ items: Record<string, number> }, null>({
+    kind: "pocket.extension-command-request",
+    version: 1,
+    family: true,
+    scope: "conversation",
+    history: "latest",
+    fork: "initial",
+    initial: () => ({ items: {} }),
+});
+
+/**
  * The `!` commands people started here, by request id (`user:request`), oldest first: a request sent again after its
  * reply was lost runs its command once, also across a restart. A fork starts without them.
  */

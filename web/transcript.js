@@ -4,7 +4,7 @@ import { Component } from "preact";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
 import { initials, personColor } from "./avatar.js";
 import { browserAvailable, setBrowserOpen } from "./browser.js";
-import { describeCall } from "./calls.js";
+import { describeCall, describersRevision } from "./calls.js";
 import { DiffBlock } from "./diff.js";
 import { LinkedChats } from "./linked-chats.js";
 import { fromServer } from "./seen.js";
@@ -303,11 +303,10 @@ function UserEntry({ entry, view, users }) {
     const sent = via ? written.slice(via[0].length) : written;
     const scheduled = sent.startsWith(SCHEDULED);
     const peer = via && /^linked peer (chat-[a-f0-9-]{36})$/.exec(via[1]);
-    // Keep routing instructions in the model's transcript, not in the person's reading of a peer message.
-    const peerText =
-        peer && sent.startsWith(`Message from linked peer ${peer[1]}.`)
-            ? /\n<linked-chat-message>\n([\s\S]*)\n<\/linked-chat-message>$/.exec(sent)?.[1]
-            : undefined;
+    // The label and stored fence identify peer messages even when their routing instructions change.
+    const peerText = peer
+        ? /\n<linked-chat-message>\n([\s\S]*)\n<\/linked-chat-message>$/.exec(sent)?.[1]
+        : undefined;
     const body = peerText ?? (scheduled ? sent.slice(SCHEDULED.length) : sent);
     const files = attachments ? parseAttachments(attachments) : [];
     // `/skill:name request`: the skill by name, and the request.
@@ -347,7 +346,7 @@ function UserEntry({ entry, view, users }) {
                 ${name && html`<b class="prompt-author">${name}</b>`}
                 ${entry.at && html`<span class="prompt-time">${clock(entry.at)}</span>`}
                 ${scheduled && html`<span class="prompt-time">· scheduled</span>`}
-                ${via && html`<span class="prompt-time">· via ${via[1]}</span>`}
+                ${via && html`<span class="prompt-time">· via ${peerText === undefined ? via[1] : "a linked session"}</span>`}
             </span>
             <div class="prompt-body">
                 ${
@@ -477,8 +476,16 @@ function stepWords(call) {
             };
         case "watch_pr":
             return { label: "watch PR", subject: [args.action, args.pr].filter(Boolean).join(" ") };
-        default:
-            return { label: call.name, subject: describeCall(call).subject };
+
+        default: {
+            const described = describeCall(call);
+
+            // An extension's own words for its tool, or the tool's name.
+            return {
+                label: described.own ? described.label : call.name,
+                subject: described.subject,
+            };
+        }
     }
 }
 
@@ -1487,31 +1494,24 @@ const SHELL_ENDS = {
 /** How many of a command's last lines show before "Show all". */
 const SHELL_LINES = 12;
 
-/** A command someone ran with `!` (or `!!`, which Pi does not see): what it printed, and how it ended. */
-function ShellEntry({ entry }) {
+/**
+ * What a command printed, as a card: a `!` command's, or an extension command's card. A long output shows its last lines
+ * until opened, and one the server cut short loads in full on a tap.
+ */
+function OutputCard({ entry, command, meta, failed = false, longCommand = false, copy = false }) {
     const [open, setOpen] = useState(false);
     const [full, setFull] = useState(null);
     const output = (full ?? entry.output).replace(/\s+$/, "");
     const lines = output.split("\n");
     const long = lines.length > SHELL_LINES;
-    // A long command (a paste in it, say) shows its first lines until opened.
-    const longCommand = entry.command.split("\n").length > 3 || entry.command.length > 240;
-    const end =
-        entry.status === "done"
-            ? entry.code === 0
-                ? ""
-                : `exit ${entry.code}`
-            : SHELL_ENDS[entry.status];
+    const whole = async () =>
+        full ?? (entry.truncated ? (await actions.fullEntry(entry.id)).output : entry.output);
 
     return html`<div class="shell-row" id=${`entry-${entry.id}`}>
-        <div class=${`shell-card ${end ? "failed" : ""} ${open ? "open" : ""}`}>
+        <div class=${`shell-card ${failed ? "failed" : ""} ${open ? "open" : ""}`}>
             <div class="shell-head">
-                <span class="mono shell-command">$ ${entry.command}</span>
-                <span class="muted small">
-                    ${entry.name}
-                    ${end ? ` · ${end}` : ""}
-                    ${entry.context ? "" : " · not shown to Pi"}
-                </span>
+                <span class="mono shell-command">${command}</span>
+                <span class="muted small">${meta}</span>
             </div>
             ${
                 output !== "" &&
@@ -1532,15 +1532,61 @@ function ShellEntry({ entry }) {
                     class="link small"
                     onClick=${() =>
                         attempt(async () => {
-                            setFull((await actions.fullEntry(entry.id)).output);
+                            setFull(await whole());
                             setOpen(true);
                         })}
                 >
                     Load everything
                 </button>`
             }
+            ${
+                copy &&
+                html`<button
+                    class="link small"
+                    onClick=${() =>
+                        attempt(async () => {
+                            const text = await whole();
+
+                            setFull(text);
+                            await copyText(text);
+                            notify("info", "Copied the output.");
+                        })}
+                >
+                    Copy output
+                </button>`
+            }
         </div>
     </div>`;
+}
+
+/** An extension command's card: text for the people here, never in Pi's context. */
+function CommandEntry({ entry }) {
+    return html`<${OutputCard}
+        entry=${entry}
+        command=${`/${entry.command}`}
+        meta=${`${entry.name} · not shown to Pi${entry.clipped ? " · only the end is kept" : ""}`}
+        copy=${true}
+    />`;
+}
+
+/** A command someone ran with `!` (or `!!`, which Pi does not see): what it printed, and how it ended. */
+function ShellEntry({ entry }) {
+    // A long command (a paste in it, say) shows its first lines until opened.
+    const longCommand = entry.command.split("\n").length > 3 || entry.command.length > 240;
+    const end =
+        entry.status === "done"
+            ? entry.code === 0
+                ? ""
+                : `exit ${entry.code}`
+            : SHELL_ENDS[entry.status];
+
+    return html`<${OutputCard}
+        entry=${entry}
+        command=${`$ ${entry.command}`}
+        meta=${`${entry.name}${end ? ` · ${end}` : ""}${entry.context ? "" : " · not shown to Pi"}`}
+        failed=${Boolean(end)}
+        longCommand=${longCommand}
+    />`;
 }
 
 /** Something a person did that Pi was told about, such as undoing a file. */
@@ -1631,6 +1677,10 @@ function EntryView({ entry }) {
         return html`<${ShellEntry} entry=${entry} />`;
     }
 
+    if (entry.kind === "command") {
+        return html`<${CommandEntry} entry=${entry} />`;
+    }
+
     if (entry.kind === "note") {
         return html`<${NoteEntry} entry=${entry} />`;
     }
@@ -1692,6 +1742,8 @@ function callDeps(block, results, slots, approvals) {
         results.get(block.id),
         slot === undefined ? "" : JSON.stringify(slot),
         decision === undefined ? "" : JSON.stringify(decision),
+        // How extensions describe their tools' calls (`pocket.toolCall`).
+        describersRevision(),
     ];
 
     if (slot?.taskId !== undefined) {

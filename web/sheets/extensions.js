@@ -61,7 +61,7 @@ const ACCESS_WORDS = {
     view: "everyone who sees every session",
 };
 
-/** What a module adds to the app: its routes, and its browser module with how it stands in this browser. */
+/** What a module adds to the app: its routes, commands, and browser module with how it stands in this browser. */
 function WebPart({ module }) {
     const web = module.web;
 
@@ -72,6 +72,7 @@ function WebPart({ module }) {
     const here = browserModuleState(module.file.replace(/\.ts$/, ""));
     const parts = [
         web.routes.length > 0 && `routes: ${web.routes.join(", ")}`,
+        web.commands?.length > 0 && `commands: ${web.commands.join(", ")}`,
         web.client && `browser module for ${ACCESS_WORDS[web.client] ?? web.client}`,
         here?.status === "loading" && "loading here",
         here?.status === "off" && "off in this tab",

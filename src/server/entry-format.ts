@@ -25,6 +25,18 @@ export const FROM_PI_ENTRY = "pocket.from-pi";
 
 /** What that entry holds: the Pi session's id, its title, and its file. */
 export type FromPiData = { session: string; title: string; file: string };
+/** The entry kind of an extension command's card: text for the people here, never in Pi's context. */
+export const COMMAND_ENTRY = "pocket.extension-command";
+
+export type CommandData = {
+    command: string;
+    by: string;
+    name: string;
+    output: string;
+    taskId: number;
+    /** Only the end of a longer output is kept. */
+    clipped?: boolean;
+};
 
 /** What a command's entry holds. */
 export type ShellData = {

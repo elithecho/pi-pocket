@@ -800,6 +800,7 @@ export class Commands {
 
         app.collab.setTyping(id, user, null);
         await this.#touched(id, typed, text === typed ? undefined : text);
+
         this.#reportUnanswered(id, submission.wait(context));
 
         if (failure !== undefined) {

@@ -198,7 +198,7 @@ test("a browser module loads for the people it is for, and its folder serves onl
     // Panel's is for everyone with every session; Solo's for the owner alone.
     assert.deepEqual(
         (await uiFor("Vic")).map((each) => each.module),
-        ["panel"],
+        ["agent-teams", "panel"],
     );
     assert.deepEqual(await uiFor("Sid"), []);
 
