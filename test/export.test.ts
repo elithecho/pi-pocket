@@ -116,3 +116,26 @@ test("fences grow past any backtick run inside", () => {
     assert.equal(fence("plain"), "```\nplain\n```");
     assert.equal(fence("has ```` four", "md"), "`````md\nhas ```` four\n`````");
 });
+
+test("passive extension messages export as generic safe fenced content with plugin provenance", () => {
+    const markdown = transcriptMarkdown({
+        title: "Plugin messages",
+        cwd: "/tmp",
+        exportedAt: new Date(0),
+        authors: {},
+        entries: [
+            {
+                id: 1,
+                kind: "extension",
+                customType: "arbitrary-plugin",
+                text: "```\n<script>not executable</script>",
+                images: 1,
+            } as unknown as ClientEntry,
+        ],
+    });
+
+    assert.match(markdown, /Pi extension/);
+    assert.match(markdown, /arbitrary-plugin/);
+    assert.match(markdown, /````\n```\n<script>not executable<\/script>\n````/);
+    assert.match(markdown, /1 image/);
+});

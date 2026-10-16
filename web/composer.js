@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
 import { Avatar } from "./avatar.js";
 import { chatUnread, TypingLine } from "./chat.js";
 import {
+    currentTemplates,
     loadTemplates,
     parseCommand,
     parseTemplate,
@@ -28,6 +29,7 @@ import {
 import { useDock } from "./dock.js";
 import { SubagentsBar } from "./subagents.js";
 import { TrustBar } from "./trust.js";
+import { TerminalPanel } from "./terminal.js";
 import { prefs } from "./theme.js";
 import { MicButton, useDictation } from "./voice.js";
 import {
@@ -425,14 +427,14 @@ export function Composer() {
             addFiles(insert.files);
         }
 
-        if (insert.text === "") {
+        if (insert.text === "" && !insert.replace) {
             return;
         }
 
         const current = drafts.get(conversationId);
 
         update(
-            current.trim() === ""
+            insert.replace || current.trim() === ""
                 ? insert.text
                 : `${current.replace(/\s+$/, "")}${insert.inline ? " " : "\n\n"}${insert.text}`,
         );
@@ -474,6 +476,20 @@ export function Composer() {
         // A command is not a message to Pi: no "typing to Pi" for it.
         typing(value.trim() === "" || value.startsWith("/") ? null : "pi");
     };
+
+    // Refresh an open slash list even when its text did not change (reload, cwd, module switch).
+    useEffect(() => {
+        if (text.startsWith("/")) {
+            loadTemplates();
+        }
+    }, [
+        text.startsWith("/"),
+        conversationId,
+        agent?.cwd,
+        store.state.server?.startedAt,
+        store.state.server?.extensionRevision,
+        store.state.templates === null,
+    ]);
 
     // Ctrl+R: what was sent before that has the words in the box.
     const recalled = searching ? searchHistory(text) : [];
@@ -528,6 +544,8 @@ export function Composer() {
 
     /** Run a slash command. The text goes away once it worked; attached files stay for the next message. */
     const runCommand = async ({ command, arg }) => {
+        const submitted = drafts.get(conversationId);
+
         setSending(true);
         const ok = await attempt(async () => {
             await command.run(arg);
@@ -537,7 +555,8 @@ export function Composer() {
 
         setSending(false);
 
-        if (ok) {
+        // Preserve edits made while waiting, including the command's own setEditorText effect.
+        if (ok && drafts.get(conversationId) === submitted) {
             update("");
         }
     };
@@ -567,7 +586,7 @@ export function Composer() {
 
     /** A tapped suggestion: commands that take text, and prompt templates, fill the box; the others run at once. */
     const choose = (command) => {
-        if (command.args || command.template) {
+        if (command.args || command.template || command.extension) {
             update(`/${command.name} `);
             focusEnd();
         } else {
@@ -651,6 +670,23 @@ export function Composer() {
 
         if (shell) {
             return runShell(full);
+        }
+
+        // Never let an unresolved plugin draft fall through to ordinary model submission on reload.
+        const cache = currentTemplates();
+
+        if (
+            /^\/[^/\s]+(?:\s|$)/.test(full.trimStart()) &&
+            store.state.server?.extensions?.includes("pocket-terminal") &&
+            (!cache || cache.loading || cache.error)
+        ) {
+            loadTemplates();
+            notify(
+                "info",
+                "Wait for slash commands to load, or retry loading them before sending.",
+            );
+
+            return;
         }
 
         setSending(true);
@@ -973,7 +1009,9 @@ export function Composer() {
             <div class="dock" ref=${dock}>
                 <${TypingLine} where="pi" />
                 <${SubagentsBar} />
+                <${TerminalPanel} />
             </div>
+            <${TerminalPanel} placement="belowEditor" />
             <${ParentSessionButton} />
             <div class="view-only">
                 <span>
@@ -1036,6 +1074,7 @@ export function Composer() {
             <${WatchBar} />
             <${SubagentsBar} />
             <${TrustBar} />
+            <${TerminalPanel} showCommands=${text.startsWith("/")} />
         </div>
         <${ParentSessionButton} />
         ${
@@ -1359,6 +1398,7 @@ export function Composer() {
                     </div>
                 </div>`
         }
+        <${TerminalPanel} placement="belowEditor" />
         <${StatusLine} />
     </footer>`;
 }

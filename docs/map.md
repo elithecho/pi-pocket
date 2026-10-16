@@ -68,6 +68,17 @@ A module split into parts keeps its name for the part others import, with the re
 | `github.ts`               | GitHub through `gh`: running it unattended, repository and PR names in every form, and whether `gh`'s account can push to a repository                                                                                                        |
 | `memory.ts`               | Memory: lessons Pi keeps across sessions, each for a project (a repository with its worktrees, or a folder) or everywhere; the lessons in force for a session, and people's view, writes, and approvals                                       |
 
+### Terminal Pi plugin bridge
+
+`terminal/manager.ts` connects per-conversation child hosts to admission, dynamic tools, lifecycle hooks
+and portable UI. `terminal/worker.ts` runs the SDK, `host.ts` owns child IPC/lifecycle, `protocol.ts`
+validates wire data, `projection.ts` and `entries.ts` build the branch-aware SDK view, and `store.ts`
+commits ordered effects and outbox intents. `extensions/terminal.ts` is the off-by-default module.
+`web/terminal.js` renders portable forms/status/widgets; `web/commands.js` merges plugin suggestions
+and native commands. `web/transcript.js` provides the generic text/image fallback for displayed passive
+messages. `schedules.ts` restores idle hosts before scheduled request preparation. See
+[terminal-extensions.md](terminal-extensions.md) for compatibility and checks.
+
 ### A conversation's folder and history
 
 | File                                   | Owns                                                                                                                                                                                               |

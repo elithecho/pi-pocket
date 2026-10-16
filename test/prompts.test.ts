@@ -19,7 +19,25 @@ import {
     fillTemplate,
     loadPromptTemplates,
     parseArguments,
+    terminalPromptTemplates,
 } from "../src/server/prompts.ts";
+
+test("templates in the plugin namespace have unambiguous aliases even beside an existing escaped name", () => {
+    const templates = [
+        { name: "ext:portable", description: "", content: "Escaped $1", path: "/x/a.md" },
+        { name: "template:ext:portable", description: "", content: "Original $1", path: "/x/b.md" },
+    ];
+
+    assert.deepEqual(
+        terminalPromptTemplates(templates).map((each) => each.name),
+        ["template:template:ext:portable", "template:ext:portable"],
+    );
+    assert.equal(
+        expandPromptTemplate("/template:template:ext:portable hello", templates),
+        "Escaped hello",
+    );
+    assert.equal(expandPromptTemplate("/template:ext:portable hello", templates), "Original hello");
+});
 
 test("arguments split at spaces outside quotes, and fill every kind of placeholder", () => {
     assert.deepEqual(parseArguments(`a "b c" 'd e'  f`), ["a", "b c", "d e", "f"]);

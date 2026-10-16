@@ -32,6 +32,7 @@ const ORDER = [
     "browser.ts",
     "subagents.ts",
     "schedules.ts",
+    "terminal.ts",
     "goals.ts",
     "plan.ts",
     "guard.ts",
@@ -43,7 +44,7 @@ const ORDER = [
 /** Modules the app cannot work without: always on. */
 const REQUIRED = new Set(["prompt.ts"]);
 /** Built-in modules that stay off until the owner turns them on. Drop-ins all do. */
-const OFF_BY_DEFAULT = new Set(["guard.ts"]);
+const OFF_BY_DEFAULT = new Set(["guard.ts", "terminal.ts"]);
 const TITLES: Record<string, string> = {
     "prompt.ts": "System prompt",
     "artifacts.ts": "Artifacts",
@@ -51,6 +52,7 @@ const TITLES: Record<string, string> = {
     "subagents.ts": "Subagents",
     "schedules.ts": "Scheduled messages",
     "goals.ts": "Done when",
+    "terminal.ts": "Terminal extensions",
     "plan.ts": "Plan mode",
     "guard.ts": "Lancet Guard",
     "codemode.ts": "Codemode",

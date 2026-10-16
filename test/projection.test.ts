@@ -412,3 +412,35 @@ test("peek lines keep each step short: shell commands, notes, attachments, long 
     );
     assert.deepEqual(peekLines([], { busy: false }), []);
 });
+
+test("passive custom messages project generically only when displayed, without executing terminal renderers", () => {
+    const passive = {
+        ...entry("pocket.terminal-message", {
+            role: "user",
+            content: [
+                { type: "text", text: "A plugin update <script>danger()</script>" },
+                { type: "image", data: "x", mimeType: "image/png" },
+            ],
+            timestamp: 123,
+        }),
+        data: { custom: { type: "custom_message", customType: "arbitrary-plugin", display: true } },
+    } as unknown as EntryRecord;
+
+    assert.deepEqual(projectEntry(passive), {
+        id: 1,
+        kind: "extension",
+        customType: "arbitrary-plugin",
+        text: "A plugin update <script>danger()</script>",
+        images: 1,
+        at: 123,
+    });
+    assert.equal(
+        projectEntry({
+            ...passive,
+            data: {
+                custom: { type: "custom_message", customType: "arbitrary-plugin", display: false },
+            },
+        } as unknown as EntryRecord),
+        undefined,
+    );
+});

@@ -516,6 +516,7 @@ test("the owner turns extensions off and on, the guard follows its switch, and t
             "browser.ts",
             "subagents.ts",
             "schedules.ts",
+            "terminal.ts",
             "goals.ts",
             "plan.ts",
             "guard.ts",
@@ -537,6 +538,10 @@ test("the owner turns extensions off and on, the guard follows its switch, and t
     assert.deepEqual(module("codemode.ts").extensions[0]?.tools, ["codemode"]);
     assert.match(module("guard.ts").summary, /^Lancet Guard for Pi Pocket's tools\.$/);
     assert.deepEqual(module("subagents.ts").extensions[0]?.tools, ["subagent"]);
+
+    assert.equal(module("terminal.ts").title, "Terminal extensions");
+    assert.equal(module("terminal.ts").enabled, false);
+    assert.equal(app.loader.extensionNames().includes("pocket-terminal"), false);
 
     // Lancet Guard is off until the owner turns it on.
     assert.equal(module("guard.ts").enabled, false);

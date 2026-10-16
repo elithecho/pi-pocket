@@ -131,6 +131,16 @@ export function ExtensionsSheet() {
         }
 
         if (
+            module.file === "terminal.ts" &&
+            !module.enabled &&
+            !confirm(
+                "Turn on Terminal extensions?\n\nConfigured Pi plugins run on this host with your OS rights, including access to files, commands, and the network. Isolated hosts do not sandbox their permissions. Enable only plugins you trust.",
+            )
+        ) {
+            return;
+        }
+
+        if (
             module.source === "drop-in" &&
             !module.enabled &&
             !confirm(
