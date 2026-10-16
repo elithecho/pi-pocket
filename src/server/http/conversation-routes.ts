@@ -144,6 +144,14 @@ export async function conversationRoutes(
         });
     }
 
+    if (third === "promote" && method === "POST") {
+        const body = await readJson<{ submissionId?: unknown }>(request);
+
+        return json(response, 200, {
+            promoted: await app.commands.promoteQueued(id, user, body.submissionId),
+        });
+    }
+
     if (third === "configure" && method === "POST") {
         await app.commands.configure(id, user, await readJson(request));
 

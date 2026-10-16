@@ -2780,8 +2780,15 @@ pre.diff .del {
     padding-top: 8px;
 }
 
+.queued:has(> .queued-text.open) > .queued-promote,
 .queued:has(> .queued-text.open) > .queued-remove {
     margin-top: 4px;
+}
+
+.queued .queued-promote {
+    width: 34px;
+    height: 34px;
+    color: var(--accent);
 }
 
 .queued .queued-remove {
@@ -2792,6 +2799,11 @@ pre.diff .del {
 
 /* A thumb's room around the small mark. */
 @media (pointer: coarse) {
+    .queued .queued-promote {
+        width: 40px;
+        height: 40px;
+    }
+
     .queued .queued-remove::after {
         content: "";
         position: absolute;

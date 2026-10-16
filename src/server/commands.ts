@@ -23,6 +23,7 @@ import {
     type ConversationId,
     defineTask,
     type EntryId,
+    InboxDoc,
     LiveDoc,
     type ModelRef,
     type SettledSubmissionRecord,
@@ -1285,6 +1286,51 @@ export class Commands {
         }
 
         return result;
+    }
+
+    /** Promote one or all pending follow-ups without changing their identity, content or attribution. */
+    async promoteQueued(id: ConversationId, user: User, submissionId?: unknown): Promise<number> {
+        const app = this.#app;
+
+        app.requireSee(user, id);
+        await app.requireDriver(id, user);
+
+        if (
+            submissionId !== undefined &&
+            (typeof submissionId !== "number" ||
+                !Number.isSafeInteger(submissionId) ||
+                submissionId <= 0)
+        ) {
+            throw new HttpError(400, "submissionId must be a positive safe integer.");
+        }
+
+        return app.harness.commit(async (tx) => {
+            const inbox = await tx.doc(InboxDoc, id);
+            const items = inbox.items.filter(
+                (item) =>
+                    item.mode === "followUp" &&
+                    (submissionId === undefined || Number(item.id) === submissionId),
+            );
+
+            if (items.length === 0) {
+                return 0;
+            }
+
+            const live = await tx.doc(LiveDoc, id);
+
+            if (live.run === undefined) {
+                throw new HttpError(
+                    409,
+                    "Pi is not running. Send a message to resume the queued work first.",
+                );
+            }
+
+            for (const item of items) {
+                item.mode = "steer";
+            }
+
+            return items.length;
+        }, context);
     }
 
     async configure(

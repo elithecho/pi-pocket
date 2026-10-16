@@ -358,6 +358,7 @@ export function Composer() {
     // The queued message read in full, tapped open: one line each until then.
     const [reading, setReading] = useState(null);
     const [sending, setSending] = useState(false);
+    const [promoting, setPromoting] = useState(false);
     // Slash command suggestions: the highlighted one, and whether Escape hid the list.
     const [pick, setPick] = useState(0);
     const [hideCommands, setHideCommands] = useState(false);
@@ -796,7 +797,33 @@ export function Composer() {
         return true;
     };
 
+    const promoteQueued = async (submissionId) => {
+        if (promoting || !canSteer() || blocked) {
+            return;
+        }
+
+        setPromoting(true);
+        await attempt(() => actions.promoteQueued(submissionId));
+        setPromoting(false);
+    };
+
     const onKey = (event) => {
+        const mod = APPLE ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
+
+        // Promote the inbox, never send the draft, even while completing or searching.
+        if (
+            event.key === "Enter" &&
+            mod &&
+            !event.altKey &&
+            !event.shiftKey &&
+            !event.isComposing
+        ) {
+            event.preventDefault();
+            promoteQueued();
+
+            return;
+        }
+
         if (
             event.ctrlKey &&
             !event.metaKey &&
@@ -1101,6 +1128,21 @@ export function Composer() {
                             >
                                 ${queuedText(item)}
                             </button>
+                            ${
+                                item.mode === "followUp" &&
+                                canSteer() &&
+                                !blocked &&
+                                busy &&
+                                html`<button
+                                    class="icon-button small queued-promote"
+                                    aria-label="Steer now"
+                                    title="Steer this message at the next pause"
+                                    disabled=${promoting}
+                                    onClick=${() => promoteQueued(item.id)}
+                                >
+                                    <${Icon} path="M6 18L18 6M6 6h12v12" size=${16} />
+                                </button>`
+                            }
                             ${
                                 canSteer() &&
                                 (!blocked || item.by === me?.id) &&

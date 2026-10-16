@@ -38,6 +38,7 @@ const SHORTCUTS = [
             ["↑", "In an empty box: what you sent before"],
             ["Ctrl R", "Search what you sent before"],
             ["Ctrl W", "Delete the previous word or selected text"],
+            ["Mod Enter", "Steer every queued message at the next pause (keeps your draft)"],
             ["Alt V", "Dictate into the message box, or stop (where the browser can)"],
             ["Esc Esc", "Stop Pi while it works"],
         ],
