@@ -1,10 +1,24 @@
 // Message-box editing shortcuts in the real app, against a throwaway server.
-import { type App, cleanUp, newSession, openApp, root, scriptedModel, until } from "./helpers.ts";
+import {
+    type App,
+    cleanUp,
+    context,
+    lastText,
+    modelTexts,
+    newSession,
+    openApp,
+    owner,
+    root,
+    scriptedModel,
+    until,
+} from "./helpers.ts";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
+import { fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
+import { InboxDoc, type ConversationId } from "@earendil-works/pi-durable";
 import { Browsers } from "../src/server/browser.ts";
 import { findBrowser } from "../src/server/browser/discovery.ts";
 import type { BrowserPage } from "../src/server/browser/page.ts";
@@ -15,19 +29,33 @@ let app: App;
 let server: Server;
 let browsers: Browsers;
 let page: BrowserPage;
+let session: ConversationId;
 
 before(async () => {
     if (real.skip) {
         return;
     }
 
-    app = await openApp(scriptedModel());
+    app = await openApp(
+        scriptedModel((request) => {
+            const { role, text } = lastText(request as never);
+
+            if (role === "user" && text.includes("hold queue controls")) {
+                return fauxAssistantMessage([fauxToolCall("bash", { command: "sleep 30" })], {
+                    stopReason: "toolUse",
+                });
+            }
+
+            return fauxAssistantMessage([fauxText(`echo: ${text}`)]);
+        }),
+    );
     server = createServer(
         createHandler({ app, listen: { host: "127.0.0.1", port: 0 }, restart: () => {} }),
     );
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
-    const session = await newSession(app);
+
+    session = await newSession(app);
 
     browsers = new Browsers({
         dataDir: mkdtempSync(join(root, "composer-ui-")),
@@ -141,3 +169,99 @@ test("Ctrl+W ignores composition and additional modifiers", real, async () => {
         });
     }
 });
+
+test(
+    "queue arrows promote one message; Mod+Enter promotes all without sending the draft",
+    real,
+    async () => {
+        await app.commands.submit(session, owner(app), {
+            text: "hold queue controls",
+            requestId: "hold-controls",
+        });
+        await until(
+            async () => (await modelTexts(app, session)).some((text) => text.includes("sleep 30")),
+            "tool round holding the queue",
+        );
+        const queue = async (text: string) =>
+            app.commands.submit(session, owner(app), {
+                text,
+                requestId: crypto.randomUUID(),
+                mode: "followUp",
+            });
+        const modes = async () =>
+            (await app.harness.snapshot(InboxDoc, session, context))!.items.map(
+                (item) => item.mode,
+            );
+        const arrows = async () =>
+            JSON.parse(
+                await page.evaluate(
+                    `return JSON.stringify(document.querySelectorAll('[aria-label="Steer now"]').length)`,
+                ),
+            );
+        const apple =
+            (await page.evaluate(`return JSON.stringify((await import('/ui.js')).APPLE)`)) ===
+            "true";
+        const mod = apple
+            ? { key: "Enter", ctrlKey: false, metaKey: true }
+            : { key: "Enter", ctrlKey: true };
+
+        try {
+            await queue("first queued");
+            await queue("second queued");
+            await until(async () => (await arrows()) === 2, "two promotion arrows");
+            await page.click({
+                selector: '[role="radio"][title="Pi reads it when this run ends"]',
+            });
+            await page.click({ selector: '[aria-label="Steer now"]' });
+            await until(
+                async () => (await modes()).join() === "steer,followUp",
+                "only first promoted",
+            );
+            await until(async () => (await arrows()) === 1, "promoted arrow removed");
+
+            // IME Enter does not promote or send. Mod+Enter leaves a command-like draft and the Queue toggle alone.
+            assert.equal(
+                (await edit("/draft stays", 12, 12, { ...mod, isComposing: true })).prevented,
+                false,
+            );
+            assert.deepEqual(await modes(), ["steer", "followUp"]);
+            assert.equal((await edit("/draft stays", 12, 12, mod)).prevented, true);
+            await until(
+                async () => (await modes()).join() === "steer,steer",
+                "all pending messages promoted",
+            );
+            assert.equal(
+                await page.evaluate(
+                    `return JSON.stringify(document.querySelector('.composer textarea').value)`,
+                ),
+                JSON.stringify("/draft stays"),
+            );
+            assert.equal(
+                await page.evaluate(
+                    `return JSON.stringify([...document.querySelectorAll('[role="radio"]')].find((button) => button.textContent.trim() === "Queue").getAttribute('aria-checked'))`,
+                ),
+                JSON.stringify("true"),
+            );
+
+            // Empty draft works too, with multiple follow-ups. No queue is also a handled no-op.
+            await queue("third queued");
+            await queue("fourth queued");
+            assert.equal((await edit("", 0, 0, mod)).prevented, true);
+            await until(
+                async () => (await modes()).join() === "steer,steer,steer,steer",
+                "empty draft promotes every follow-up",
+            );
+            assert.equal((await edit("unsent words", 12, 12, mod)).prevented, true);
+            assert.equal((await modes()).length, 4);
+
+            // Ordinary Enter still submits the draft using the selected Queue mode.
+            await edit("ordinary enter", 14, 14, { key: "Enter", ctrlKey: false });
+            await until(
+                async () => (await modes()).join() === "steer,steer,steer,steer,followUp",
+                "normal Enter still queues",
+            );
+        } finally {
+            await app.commands.abort(session, owner(app));
+        }
+    },
+);

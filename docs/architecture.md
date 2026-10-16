@@ -146,7 +146,7 @@ A conversation's routes (`/api/c/:id`) run only after `requireSee`.
 
 Where the other checks live:
 
-- **Commands and collaboration** check steering and driving themselves (`requireSteer`, `requireDriver`). They are called from routes, from tasks, and from each other.
+- **Commands and collaboration** check steering and driving themselves (`requireSteer`, `requireDriver`). They are called from routes, from tasks, and from each other. Queue promotion requires the driver and changes only matching `InboxDoc` follow-up modes in one commit with a `LiveDoc.run` busy check; submission identity, content, attribution and report bookkeeping stay intact. Stale promotions are no-ops; stranded idle queues are not restarted implicitly.
 - **Owner-only settings** are checked in `http/api.ts`: extension modules, provider sign-ins, restart. Changing people's access, the approval rule, the default model for new sessions, and the models subagents may use is checked in `app.ts`.
 - **Invites** are checked in `http/api.ts` too: viewers and people invited to one session cannot create them, and only the owner makes an owner invite. An invite lasts one of `INVITE_MINUTES` (`auth.ts`; an owner invite, always 15) and is kept in `config.json` by its code's hash, so a day's or a week's outlives a restart. Only whoever made one ends it early (`POST /api/invite/cancel`), as the invite sheet does with the one it showed when its settings change, and with one that answers after it closed. One person keeps at most `MAX_INVITES` (`config.ts`) live, their oldest ending first; removing someone ends theirs, and a new owner token ends owner invites not yet used.
 - **The workspace's path helpers** (`conversationFile`, `readableFile`) leave seeing the conversation to their caller.
