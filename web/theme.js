@@ -1,5 +1,5 @@
 // Appearance: Omarchy palettes as CSS variables, "Follow desktop" (the Omarchy theme this machine runs), tiled windows,
-// motion, text size, and the sidebar's shape. Saved per browser. index.html applies the last look before the first
+// motion, text size, density, and the sidebar's shape. Saved per browser. index.html applies the last look before the first
 // paint from `pocket.themeCache`, so a reload never flashes another theme.
 import { THEMES } from "./themes.js";
 import { api, store } from "./store.js";
@@ -19,17 +19,22 @@ const DEFAULTS = {
     wallpaper: false,
     /** "auto" follows the system's reduced-motion setting. */
     motion: "auto",
-    text: 14,
+    /** The conversation's text in pixels, 13 to 17; the rest of the app keeps its own sizes. */
+    text: 15,
+    /** How much room the spacing takes: "comfortable", "compact", or "tight". Font sizes stay. */
+    density: "comfortable",
     /** The sidebar on wide screens: "open", or "rail" (icons and numbered sessions only). */
     sidebar: "open",
-    /** The open sidebar's width, its borders, the rail, and the list's: a 264px list. */
-    sidebarWidth: 324,
+    /** The open sidebar's width, its borders, the rail, and the list's: a 254px list. */
+    sidebarWidth: 312,
     /** How the session list groups: "recent" (by day) or "folder". */
     group: "recent",
     /** Other sessions' live work as peek tiles beside the session (a strip on narrow screens). Off until turned on. */
     peeks: false,
     /** How fast the last answer came, in the status line under the message box. Off until turned on. */
     speed: false,
+    /** A chevron before the live line's spinner that opens Pi's thinking above it, live. Off until turned on. */
+    showThinking: false,
 };
 
 function readJson(key, fallback) {
@@ -46,23 +51,32 @@ const reduceQuery = matchMedia("(prefers-reduced-motion: reduce)");
 
 /** Set once this browser's saved look has the sidebar's width for the rail beside the list. */
 const RAIL_KEY = "pocket.railBeside";
+/** Set once this browser's saved look has the soft tiles' text size and sidebar. */
+const SOFT_KEY = "pocket.softTiles";
 
-/** What this browser saved. The sidebar's usual width was 300 before the rail went beside the list: now 324. */
+/**
+ * What this browser saved. The sidebar's usual width was 300 before the rail went beside the list, then 324, and is
+ * 312 with soft tiles. The text size was the whole app's, 12 to 16; it is now the conversation's, a step larger.
+ */
 function savedPrefs() {
     const saved = readJson(KEY, {});
 
-    if (localStorage.getItem(RAIL_KEY) !== null) {
+    if (localStorage.getItem(SOFT_KEY) !== null) {
         return saved;
     }
+
+    // Either usual width, the one from before the rail went beside the list too.
+    const usual =
+        saved.sidebarWidth === 324 ||
+        (saved.sidebarWidth === 300 && !localStorage.getItem(RAIL_KEY));
+    const next = {
+        ...saved,
+        ...(usual && { sidebarWidth: DEFAULTS.sidebarWidth }),
+        ...(typeof saved.text === "number" && { text: saved.text + 1 }),
+    };
 
     localStorage.setItem(RAIL_KEY, "1");
-
-    if (saved.sidebarWidth !== 300) {
-        return saved;
-    }
-
-    const next = { ...saved, sidebarWidth: DEFAULTS.sidebarWidth };
-
+    localStorage.setItem(SOFT_KEY, "1");
     localStorage.setItem(KEY, JSON.stringify(next));
 
     return next;
@@ -102,31 +116,6 @@ export function togglePin(id) {
 
 // ─── Palettes ───────────────────────────────────────────────────────────────────
 
-/** A Hyprland color (`rgba(33ccffee)`, `rgb(1e1e1e)`, `#hex`) as CSS. */
-function hyprColor(value) {
-    const match = /^rgba?\(\s*([0-9a-f]{6}(?:[0-9a-f]{2})?)\s*\)$/i.exec(value.trim());
-
-    if (match) {
-        return `#${match[1]}`;
-    }
-
-    return /^#[0-9a-f]{3,8}$/i.test(value.trim()) ? value.trim() : null;
-}
-
-/** A Hyprland border (`rgba(…) rgba(…) 45deg`): its color stops and angle, or null for anything else. */
-function hyprBorder(value) {
-    if (typeof value !== "string") {
-        return null;
-    }
-
-    const angle = /(-?\d+)deg\s*$/.exec(value)?.[1] ?? "45";
-    const stops = (value.match(/rgba?\([^)]*\)|#[0-9a-f]{3,8}/gi) ?? [])
-        .map(hyprColor)
-        .filter(Boolean);
-
-    return stops.length === 0 ? null : { stops, angle: Number(angle) };
-}
-
 /** The palette a theme id means: a bundled theme, or the desktop's (falling back when there is none). */
 export function paletteOf(id = prefs().theme) {
     if (id === "desktop") {
@@ -157,9 +146,6 @@ export function themeVars(palette) {
     const bg = pick("background") ?? "#1a1b26";
     const fg = pick("foreground") ?? "#a9b1d6";
     const accent = pick("accent", "blue") ?? fg;
-    const border = hyprBorder(c.hyprland_active_border);
-    const stops = border?.stops ?? [accent];
-    const inactive = hyprBorder(c.hyprland_inactive_border)?.stops[0];
 
     return {
         "--o-bg": bg,
@@ -179,31 +165,18 @@ export function themeVars(palette) {
         "--o-cyan": pick("cyan") ?? "#7dcfff",
         "--o-blue": pick("blue", "accent") ?? accent,
         "--o-magenta": pick("magenta") ?? "#bb9af7",
-        "--o-active-a": stops[0],
-        "--o-active-b": stops[stops.length - 1],
-        "--o-active":
-            stops.length > 1
-                ? `linear-gradient(${border.angle}deg, ${stops.join(", ")})`
-                : `linear-gradient(${stops[0]}, ${stops[0]})`,
-        // Only when the theme names one: otherwise style.css's default for dark or light themes.
-        "--o-inactive": inactive ?? null,
     };
 }
 
-/** Variables as an inline style, leaving out the ones a theme does not set. */
+/** Variables as an inline style. */
 export const varsStyle = (vars) =>
     Object.entries(vars)
-        .filter(([, value]) => value !== null)
         .map(([name, value]) => `${name}:${value}`)
         .join(";");
 
 function setVars(root, vars) {
     for (const [name, value] of Object.entries(vars)) {
-        if (value === null) {
-            root.style.removeProperty(name);
-        } else {
-            root.style.setProperty(name, value);
-        }
+        root.style.setProperty(name, value);
     }
 }
 
@@ -237,18 +210,17 @@ export function apply() {
         tiling: p.tiling ? "on" : "off",
         motion: reducedMotion() ? "reduced" : "full",
         rail: p.sidebar === "rail" ? "on" : "off",
+        density: p.density,
     };
 
     Object.assign(root.dataset, attrs);
     document.querySelector('meta[name="theme-color"]')?.setAttribute("content", vars["--o-bg"]);
     document.querySelector('meta[name="color-scheme"]')?.setAttribute("content", attrs.mode);
-    const cached = Object.fromEntries(Object.entries(vars).filter(([, value]) => value !== null));
-
     localStorage.setItem(
         CACHE,
         JSON.stringify({
             vars: {
-                ...cached,
+                ...vars,
                 "--wallpaper": wallpaper,
                 "--text-size": `${p.text}px`,
                 "--sidebar-w": sidebarWidth(p),

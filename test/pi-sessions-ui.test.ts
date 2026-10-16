@@ -136,43 +136,19 @@ after(async () => {
     cleanUp();
 });
 
-test("New session remembers Hide/Browse and keeps starred folders on top", real, async () => {
+test("New session keeps starred folders and guards favorite shortcuts", real, async () => {
     await newSession(app);
     await newSessionSheet();
-    await see(`return JSON.stringify(!!document.querySelector('.dir-list'))`, "folder listing");
-    await page.click({ selector: ".folder-path button" });
-    await newSessionSheet();
-    assert.equal(
-        await inPage<boolean>(`return JSON.stringify(!document.querySelector('.dir-list'))`),
-        true,
-    );
-    await page.click({ label: "Star folder" });
+    await see(`return JSON.stringify(!!document.querySelector('.fp-list'))`, "folder listing");
+    await page.click({ label: "Add to favorites" });
     await see(
-        `return JSON.stringify(!!document.querySelector('[aria-label="Unstar folder"]'))`,
+        `return JSON.stringify(!!document.querySelector('[aria-label="Remove from favorites"]'))`,
         "starred folder",
     );
     await newSessionSheet();
-    assert.equal(
-        await inPage<boolean>(`return JSON.stringify(
-        document.querySelector('.sheet-body').firstElementChild.classList.contains('folder-favorites')
-    )`),
-        true,
-        "favorites appear above the path input",
-    );
-    assert.equal(
-        await inPage<number>(
-            `return JSON.stringify(document.querySelectorAll('.folder-favorites .folder-shortcut').length)`,
-        ),
-        1,
-    );
-    assert.equal(
-        await inPage<boolean>(`return JSON.stringify(
-        document.querySelector('.folder-select').firstElementChild.classList.contains('folder-shortcut') &&
-        !document.querySelector('.folder-favorites kbd') &&
-        !document.querySelector('.folder-path .folder-star')
-    )`),
-        true,
-        "shortcut is on the left without keycaps; no star by the input",
+    await see(
+        `return JSON.stringify([...document.querySelectorAll('.fp-places-title')].filter(el => el.textContent === 'Favorites').length === 1)`,
+        "favorite shortcut is shown",
     );
     await page.evaluate(`
         const { actions } = await import('/store.js');
@@ -215,21 +191,13 @@ test("New session remembers Hide/Browse and keeps starred folders on top", real,
         true,
         "favorites fit a phone",
     );
-    await page.click({ label: "Unstar folder" });
-    await newSessionSheet();
-    assert.equal(
-        await inPage<boolean>(
-            `return JSON.stringify(!document.querySelector('.folder-favorites'))`,
-        ),
-        true,
-    );
-    await page.click({ selector: ".folder-path button" });
+    await page.click({ label: "Remove from favorites" });
     await newSessionSheet();
     await see(
-        `return JSON.stringify(!!document.querySelector('.dir-list'))`,
-        "Browse remembered too",
+        `return JSON.stringify([...document.querySelectorAll('.fp-places-title')].filter(el => el.textContent === 'Favorites').length === 0)`,
+        "favorite removed",
     );
-    await page.click({ label: "Star folder" });
+    await page.click({ label: "Add to favorites" });
     await settled();
     await page.evaluate(`
         const { APPLE } = await import('/ui.js');
@@ -245,11 +213,11 @@ test("New session remembers Hide/Browse and keeps starred folders on top", real,
         "shortcut creates and opens a real session in the starred folder",
     );
     await newSessionSheet();
-    await page.click({ label: "Unstar folder" });
+    await page.click({ label: "Remove from favorites" });
 });
 
 test(
-    "favorites sync between isolated browser profiles, but Hide/Browse stays local",
+    "favorites sync between isolated browser profiles, but hidden-folder preference stays local",
     real,
     async () => {
         const other = await browsers.open(3);
@@ -270,19 +238,19 @@ test(
             await newSessionSheet(other);
             assert.equal(
                 await inPage<boolean>(
-                    `return JSON.stringify(!document.querySelector('.folder-favorites'))`,
+                    `return JSON.stringify([...document.querySelectorAll('.fp-places-title')].filter(el => el.textContent === 'Favorites').length === 0)`,
                     other,
                 ),
                 true,
                 "old browser favorites are not migrated",
             );
-            await page.click({ label: "Star folder" });
+            await page.click({ label: "Add to favorites" });
             await see(
-                `return JSON.stringify(!!document.querySelector('.folder-favorites'))`,
+                `return JSON.stringify([...document.querySelectorAll('.fp-places-title')].filter(el => el.textContent === 'Favorites').length > 0)`,
                 "favorite on first device",
             );
             await see(
-                `return JSON.stringify(!!document.querySelector('.folder-favorites'))`,
+                `return JSON.stringify([...document.querySelectorAll('.fp-places-title')].filter(el => el.textContent === 'Favorites').length > 0)`,
                 "favorite arrives live on second device",
                 other,
             );
@@ -296,30 +264,30 @@ test(
             await other.evaluate(`localStorage.clear()`);
             await newSessionSheet(other);
             await see(
-                `return JSON.stringify(!!document.querySelector('.folder-favorites'))`,
+                `return JSON.stringify([...document.querySelectorAll('.fp-places-title')].filter(el => el.textContent === 'Favorites').length > 0)`,
                 "favorite survives clearing browser storage",
                 other,
             );
-            await page.click({ selector: ".folder-path button" });
+            await page.click({ label: "Show hidden" });
             await see(
-                `return JSON.stringify(!document.querySelector('.dir-list'))`,
-                "first device hides folders",
+                `return JSON.stringify(localStorage.getItem('pocket.folderHidden') === '1')`,
+                "first device shows hidden folders",
             );
             assert.equal(
                 await inPage<boolean>(
-                    `return JSON.stringify(!!document.querySelector('.dir-list'))`,
+                    `return JSON.stringify(localStorage.getItem('pocket.folderHidden') !== '1')`,
                     other,
                 ),
                 true,
-                "Hide/Browse is not synced",
+                "hidden-folder preference is not synced",
             );
-            await other.click({ label: "Unstar folder" });
+            await other.click({ label: "Remove from favorites" });
             await see(
-                `return JSON.stringify(!document.querySelector('.folder-favorites'))`,
+                `return JSON.stringify([...document.querySelectorAll('.fp-places-title')].filter(el => el.textContent === 'Favorites').length === 0)`,
                 "removal arrives on first device",
             );
             await see(
-                `return JSON.stringify(!document.querySelector('.folder-favorites'))`,
+                `return JSON.stringify([...document.querySelectorAll('.fp-places-title')].filter(el => el.textContent === 'Favorites').length === 0)`,
                 "removed on second device",
                 other,
             );
@@ -330,7 +298,7 @@ test(
             window.fetch = (url, init) => url === '/api/folder-favorites' && init?.method === 'POST'
                 ? Promise.reject(new Error('Favorite save failed')) : window.originalFetch(url, init);
         `);
-            await other.click({ label: "Star folder" });
+            await other.click({ label: "Add to favorites" });
             await shows("Favorite save failed", other);
             assert.deepEqual(
                 await inPage<string[]>(
@@ -340,16 +308,16 @@ test(
                 [],
             );
             await other.evaluate(`window.fetch = window.originalFetch`);
-            await other.click({ label: "Star folder" });
+            await other.click({ label: "Add to favorites" });
             await see(
-                `return JSON.stringify(!!document.querySelector('.folder-favorites'))`,
+                `return JSON.stringify([...document.querySelectorAll('.fp-places-title')].filter(el => el.textContent === 'Favorites').length > 0)`,
                 "retry saved the favorite",
                 other,
             );
             await settled();
-            await other.click({ label: "Unstar folder" });
+            await other.click({ label: "Remove from favorites" });
             await see(
-                `return JSON.stringify(!document.querySelector('.folder-favorites'))`,
+                `return JSON.stringify([...document.querySelectorAll('.fp-places-title')].filter(el => el.textContent === 'Favorites').length === 0)`,
                 "cleanup synced",
             );
         } finally {

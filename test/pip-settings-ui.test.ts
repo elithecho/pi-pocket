@@ -97,7 +97,7 @@ test(
                 "PiP model kept",
             );
             await see(
-                `!!document.querySelector('.pip-head [aria-label="PiP model"]')`,
+                `!!document.querySelector('.pip-head [aria-label^="PiP model:"]')`,
                 "panel model button",
             );
             await see(

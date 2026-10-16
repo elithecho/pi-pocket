@@ -3,6 +3,8 @@ import { awaitWithContext } from "@earendil-works/chord/context";
 import type { Skill } from "@earendil-works/pi-coding-agent";
 import type { ConversationId, Extension, ModelRef, TaskId } from "@earendil-works/pi-durable";
 import type { Browsers } from "./browser.ts";
+import type { Gallery } from "./gallery.ts";
+import type { Role } from "./config.ts";
 import type { Goals } from "./goals.ts";
 import type { TerminalManager } from "./terminal/manager.ts";
 import type { LancetGuard } from "./lancet.ts";
@@ -200,9 +202,95 @@ export interface PocketHost {
     readonly repoWatches: Pick<RepoWatches, "task">;
     /** Lessons Pi keeps across sessions (`memory.ts`): the memory tool saves them, and its section lists them. */
     readonly memory: Pick<Memory, "project" | "applying" | "inForce" | "add" | "change">;
+    /** The extension gallery (`gallery.ts`): its extension's routes are the owner's way to it. */
+    readonly gallery: Pick<
+        Gallery,
+        | "settings"
+        | "setIndex"
+        | "listing"
+        | "installed"
+        | "check"
+        | "source"
+        | "install"
+        | "updatePreview"
+        | "update"
+        | "uninstall"
+        | "review"
+        | "share"
+    >;
+}
+
+/**
+ * Who may use a module's web part: the owner alone (the default), anyone who can steer, or anyone who can view. People
+ * invited to one session never may: a web part belongs to the whole app.
+ */
+export type WebAccess = "owner" | "steer" | "view";
+
+export type WebMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+
+/** A request to a module's route, as its handler gets it. */
+export interface WebRequest {
+    readonly method: WebMethod;
+    /** The path's `:name` parts, by name. */
+    readonly params: Readonly<Record<string, string>>;
+    readonly query: URLSearchParams;
+    /** The JSON object the browser sent; empty for GET and DELETE. */
+    readonly body: Readonly<Record<string, unknown>>;
+    /** Who asked. */
+    readonly user: { readonly id: string; readonly name: string; readonly role: Role };
+    /** Aborted when the browser stops waiting for the answer. */
+    readonly signal: AbortSignal;
+}
+
+/**
+ * What a route answers: a value sent as JSON (undefined sends `{}`). An error made with `web.error` answers with its
+ * status and words; any other throw is a 500, whose words only the owner sees.
+ */
+export type WebHandler = (request: WebRequest) => unknown;
+
+/**
+ * A module's own part of the app, the second argument of its default export: routes under `/api/x/<module>/`, a browser
+ * module that adds to the app's screens, and events from here to that browser module. Routes and the browser module
+ * are registered while the module loads; they go with it when it reloads or is turned off.
+ */
+export interface ExtensionWeb {
+    /** The version of this API (`POCKET_API` in `extension-web.ts`). */
+    readonly api: number;
+    /** The module's name: its file's, without `.ts`. Its routes are under `/api/x/<module>/`. */
+    readonly module: string;
+    /** Answer `method` requests to `/api/x/<module>/<path>`. A part of `path` written `:name` matches any one part. */
+    route(
+        method: WebMethod,
+        path: string,
+        handle: WebHandler,
+        options?: { access?: WebAccess },
+    ): void;
+    /**
+     * The browser module that adds to the app: a `.js` file beside this module, or a folder with an `index.js` and the
+     * files it imports. Browsers of the people `access` lets in load it.
+     */
+    client(entry: string, options?: { access?: WebAccess }): void;
+    /**
+     * Send the browser module an event (`pocket.on(event, …)` there): to everyone it loads for, or to one person. Never
+     * throws: an event it cannot send (not JSON, too large) goes to the server's log instead.
+     */
+    send(event: string, data?: unknown, options?: { to?: string }): void;
+    /** An error for a route to throw: whoever asked gets `status` (400 to 599) and `message` as they are. */
+    error(status: number, message: string): Error;
+    /**
+     * Run `dispose` when this version of the module goes: replaced by an edit, turned off, or the server stopping. It
+     * may return a promise: a stopping server waits for it, up to 3 s.
+     */
+    onDispose(dispose: () => unknown): void;
 }
 
 /** The shape of every module in `src/server/extensions/`: a default export building one or more extensions. */
 export type ExtensionModule = {
-    default: (host: PocketHost) => Extension | readonly Extension[];
+    /** Builds the module's extensions; a module that only adds to the app returns nothing. It may be async. */
+    default: (
+        host: PocketHost,
+        web: ExtensionWeb,
+    ) => Extension | readonly Extension[] | void | Promise<Extension | readonly Extension[] | void>;
+    /** The version of the extension API the module needs, when it says: a newer one than the app's is not loaded. */
+    pocketApi?: unknown;
 };

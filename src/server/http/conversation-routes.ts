@@ -205,10 +205,29 @@ export async function conversationRoutes(
         return json(response, 200, await app.commands.watchPr(id, user, body.pr));
     }
 
-    // Memory: the lessons that apply here; one added by hand; one changed, forgotten, or approved.
+    // Memory normally applies here. The owner's pending queue reviews all projects, but never adds or edits.
+    const pendingMemory = third === "memory" && url.searchParams.get("pending") === "all";
+
+    if (pendingMemory) {
+        if (user.role !== "owner") {
+            throw new HttpError(403, "Only the owner can review all pending lessons.");
+        }
+
+        if (app.sessionMeta(app.rootOf(id))?.pip !== user.id) {
+            throw new HttpError(403, "Review all pending lessons from your private PiP.");
+        }
+
+        if (
+            method === "POST" &&
+            (fourth === undefined || (parts[4] !== "approve" && parts[4] !== "discard"))
+        ) {
+            throw new HttpError(400, "The pending queue only approves or discards lessons.");
+        }
+    }
+
     if (third === "memory" && fourth === undefined) {
         if (method === "GET") {
-            return json(response, 200, await app.memory.view(id, user));
+            return json(response, 200, await app.memory.view(id, user, pendingMemory));
         }
 
         if (method === "POST") {
@@ -236,15 +255,26 @@ export async function conversationRoutes(
             return json(
                 response,
                 200,
-                await app.memory.edit(id, user, fourth, change, {
-                    text: typeof seen.text === "string" ? seen.text : undefined,
-                    forget: seen.forget === true,
-                }),
+                await app.memory.edit(
+                    id,
+                    user,
+                    fourth,
+                    change,
+                    {
+                        text: typeof seen.text === "string" ? seen.text : undefined,
+                        forget: seen.forget === true,
+                    },
+                    pendingMemory,
+                ),
             );
         }
 
         if (change !== undefined) {
-            return json(response, 200, await app.memory.edit(id, user, fourth, change));
+            return json(
+                response,
+                200,
+                await app.memory.edit(id, user, fourth, change, undefined, pendingMemory),
+            );
         }
     }
 

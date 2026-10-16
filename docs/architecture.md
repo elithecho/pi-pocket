@@ -14,7 +14,7 @@ Some state lives in this process alone, and a restart forgets it. For example:
 - who is connected, typing, or away;
 - which tool calls wait for approval;
 - the browser's pages;
-- when each run ended, which peek tiles use;
+- when each run ended, which peek tiles and session-list squares use, and whether its last run failed;
 - provider sign-ins in progress.
 
 ## Who owns what
@@ -24,8 +24,8 @@ Some state lives in this process alone, and a restart forgets it. For example:
 **Its parts:**
 
 - `commands`, `collab`, `alerts`, `providers`, `schedules`, `goals`, `shell`, `spend`
-- `workspace`, `transcripts`, `attribution`, `piSessions`, `pip`, `watches`, `hooks`, `memory`
-- `browsers`, `linkedChats`
+- `workspace`, `transcripts`, `attribution`, `piSessions`, `pip`, `watches`, `hooks`, `memory`, `gallery`
+- `browsers`, `linkedChats`, `terminal`
 
 **What stays on `PocketApp`** (the parts call these rather than keeping copies):
 
@@ -38,11 +38,165 @@ Some state lives in this process alone, and a restart forgets it. For example:
 
 The harness, models, and settings exist only once `#open` has set them up, after the parts are made. So a part made with the app must not read them in its constructor; it reads them when it is called.
 
-Extensions never see `PocketApp`. They get `PocketHost` (`host.ts`), whose functions call into the app lazily. The HTTP layer parses a request, checks it, calls a part, and writes the answer; it holds no state of its own beyond invites and the event streams' pollers.
+Extensions never see `PocketApp`. They get `PocketHost` (`host.ts`), whose functions call into the app lazily, and `web`, through which they add routes and a browser module to the app. `ExtensionWebs` (`extension-web.ts`) keeps what each module's version added, which the loader commits once the module installed and removes with it, running its cleanups. The HTTP layer parses a request, checks it, calls a part, and writes the answer; it holds no state of its own beyond invites and the event streams' pollers.
 
 ## Favorite folders
 
-`FolderFavoritesDoc` (`pocket.folder-favorites`) stores each person's ordered favorite working folders in SQLite. `folder-favorites.ts` reads and changes only the signed-in person's list; explicit star/unstar operations run inside one harness transaction, so concurrent devices do not overwrite unrelated changes. The commit coordinator sends each connected client only its person's list as a `folder-favorites` event. `hello.folderFavorites` supplies the initial list and refreshes it on reconnect. The folder picker renders committed server state; a failed save leaves its list unchanged. Hide/Browse remains in browser storage. Earlier browser-local favorite lists are not read or imported.
+`FolderFavoritesDoc` (`pocket.folder-favorites`) stores each person's ordered favorite working folders in SQLite. `folder-favorites.ts` reads and changes only the signed-in person's list; explicit star/unstar operations run inside one harness transaction, so concurrent devices do not overwrite unrelated changes. The commit coordinator sends each connected client only its person's list as a `folder-favorites` event. `hello.folderFavorites` supplies the initial list and refreshes it on reconnect. The folder picker shows only what the server committed, so a failed save leaves its list as it was.
+
+## PiP's conversation
+
+PiP (`pip.ts`) is a conversation with a `pip` mark in its session entry, which `sessions()` leaves out of every list. The harness settings select every installed extension but PiP's (`pocket-pip`) by default; PiP's conversation stores its own selection (`PIP_EXTENSIONS`, without bash, write, or edit), which `ensure` sets again each time it opens, so PiP's tools reach no other conversation. Its tools act through `Commands` and `Schedules` as PiP's person, with that person's checks, so `canSee` keeps every PiP from everyone but its person: anyone who could write to it would act as them. Its messages to sessions are once per tool call (a request id hashed from the call's key), and each follow leaves a mark in its list (`FollowsDoc`) when it reports or is stopped, so a replayed call neither sends nor follows twice. A tab's PiP panel is a second client in PiP's room (`setPip`), whose `view` events reach the tab as `pipview`; `watching` counts it, so PiP's answers push nothing while it shows.
+
+The rail's Settings sheet has a PiP model row, and PiP's header model chip opens the existing picker with its own conversation ID and live view, not the session behind it. Its `pipPanel` configure request uses `Commands.configure`, checks private PiP ownership, and checks `LiveDoc.run` and compactions in the same commit as the model/thinking write. It leaves `lastModel` alone. Ordinary configure requests, including **Open as a conversation**, retain their behavior.
+
+## Work from outside the app
+
+A PR watch (`watches.ts`) is a `WatchDoc` in its session and a durable task there, which sleeps until its next look, looks with `gh` (`watches.gh`, which tests replace), and puts what to tell Pi in its checkpoint before sending it: the send's request id is the watch's task and count, so a restart sends it once. Comment ids told, and the commits whose failures and conflicts were told, stay in the watch. Webhooks (`hooks.ts`) are app-wide (`HooksDoc`); `/hook/…` is outside `/api` and its sign-in, and lets a post in only by its hook's secret. Both send through `Commands.submit` as their person, with a `via` that marks the message (`[via PR watch]`, `[via webhook NAME]`), so that person's checks and spend limit apply, and what came from outside is fenced (`fence.ts`, as PiP's session text is): no closing tag survives inside, in any case or spacing. A hook's address and secret are checked before its body is read. A signed hook (`signed`, for GitHub) lets a post in only by GitHub's signature: its secret is never in its address, so the address GitHub shows a repository's admins cannot post. Pi's `watch_pr` names a PR by number, which `gh` finds in the session's own repository, or one elsewhere by address only where `gh`'s account can push (`requirePush` in `github.ts`); what follows `--` is never an option.
+
+A repository watch (`repo-watches.ts`) is an item of the app-wide `RepoWatchesDoc` and a durable task in the conversation it messages (PiP's, or a session's), with the same wait, look, and send phases as a PR watch: a look puts the message in the task's checkpoint, and the send's request id is the task's and its count's, so it goes once. It reads the repository's issues, pulls, workflow runs, releases, and comments through `gh api`, and keeps the ids it told. PiP's tools (`repo_watch`, `session_watch_pr`, `session_start` with `repo`) act through `Pip` as its person; a repository is worked on or watched only where `gh`'s account can push, and `Pip.checkout` finds a session's checkout whose `origin` is the repository, or clones it once into `repos/`.
+
+## Who chooses models
+
+Only people choose models; Pi, PiP, and Pi Pocket itself never pick one on the side. Everything that runs a model uses one a person chose:
+
+- **Sessions** run on the model someone picked, or on what a new session starts with (`Commands.#defaultModel`): the owner's default, even when it is not signed in now, else a trusted project's model/thinking default, else the last model picked, else Pi's global default, else none. `project-model.ts` reads only the final session folder's `.pi/settings.json` at creation, without a cache; a fresh creation-local global-only settings reader supplies defaults and trust policy without changing `app.settings`. It checks Pi's trust store and global trust policy, validates a complete provider/model pair, and keeps known unsigned models rather than silently substituting one. Invalid trusted settings stop creation with a contained error. Thinking-only settings cannot change another source's model/thinking pair. Owner defaults bypass project settings. Imported sessions, forks, subagents, manual choices, and PiP's own conversation retain their previous selection behavior. A model the person explicitly named to PiP bypasses project defaults before its manual configuration step. Trust gained after creation applies only to later new sessions; existing choices never track file or folder changes. Extra project skill/prompt paths and per-project run policy are not supported yet; the shared app settings and older host APIs are unchanged.
+- **Subagents** run on their session's model, at its thinking level or lower (`extensions/subagents.ts`). The owner may allow other models (`subagentModels` in `config.json`: `PocketApp.setSubagentModels` replaces the list, and `allowSubagentModel`, behind `POST /api/subagent-models` that the Providers sheet sends, adds or takes off one model, reading and writing the list with no wait between, so changes that come together all count); with none allowed the tool has no model parameter, and the app rebuilds the module when the list changes. Each call checks the list as it is then: a model not on it is refused, and so is work for a subagent already on one; work for a subagent thinking harder than the session lowers it. Before an allowed model is used its sign-in is asked afresh, so a stale mark neither refuses it nor lets it through. A report of a subagent its model or provider failed (by the provider's words: a sign-in, a missing or refused model, a quota) carries the model and tells Pi to stop and tell its person.
+- **Titles, compaction, and PiP's summaries** use the conversation's own model.
+- **PiP** passes a model, or names one in what it sends, only when its person named it in their own words (`pip.ts`, with `model-names.ts`): their own messages (`u:` request ids, from the authors document) since PiP's last new context (with those its last compaction kept), and the standing instructions of the watches and webhooks to PiP that they set up; never a watch PiP set up, what was posted, or what GitHub said.
+- **Sign-ins:** `Providers` asks subscriptions' sign-ins afresh (the owner's Providers sheet, a model a subagent on another model or PiP is about to use, a run that failed on one, a run answered by a marked one) and keeps, in memory, the ones their provider refused to renew. Only subagents on another model (`resolveModel`, `modelProblem`) and PiP (`Providers.problem`) check before use, and refuse their models. Everything else tries the model: a session's own run and a subagent on its session's model fail where people see them, and a run that failed on an expired sign-in marks it; a title that fails is only logged. `modelList` and `agentInfo` mark them, and the owner is told. A check that began before a sign-in or sign-out here marks nothing.
+
+**Manual model refresh.** `Providers.modelRefresh` (`model-refresh.ts`) shares one in-flight refresh across owner tabs. `POST /api/models/refresh` requires the owner and the normal `X-Pocket` header; `hello.server.refreshModels` gates the UI against an older server. It checks local configuration with Pi’s public runtime API before reloading it, then refreshes each configured provider in parallel with a separate eight-second limit and `force: true` (network stays off under `PI_OFFLINE`). Each completed provider sends the existing `models` event and refreshes room views, so a slow provider does not hold back a healthy one. Pi owns cache publication and cancellation generations; failed catalog fetches keep its cached/static models. Refresh never configures a conversation or changes the default or subagent allow-list. Counts compare available provider/id keys before and after; provider errors are safe fixed messages, not raw exceptions that could contain credentials.
+
+`PocketApp.modelList` resolves Pi’s `enabledModels` through the SDK’s `resolveModelScopeWithDiagnostics` against available models, then `modelList` marks scope membership alongside sign-in state. Both `hello` and providers’ `models` updates use that list. Manual refresh rereads Pi settings before recomputing the scope; malformed scope values are ignored so the picker still opens. The model picker’s Scoped / All state lasts only while it is open and filters the list without changing Pi’s settings, the session’s model, or its default. Empty scopes mean all available models, not a ban on picking models.
+
+## Memory
+
+Lessons Pi keeps across sessions are one document for the whole app, `MemoryDoc` (`pocket.memory`), by id. Each is for a project or for everywhere. A project is keyed by the real path of its git common folder (`git rev-parse --git-common-dir`), so a repository and all its worktrees share lessons; outside a repository, by the folder itself. `Memory` (`memory.ts`) works out a folder's project (kept a minute per folder) and keeps the rules:
+
+- The memory extension's section renders, before each request, the lessons in force for the conversation's folder: its project's and everywhere's, not pending, oldest first. It reads committed state only, so it renders the same text until a lesson changes. PiP has no project: it gets everywhere's.
+- Pi proposes, the owner approves. Every lesson Pi saves, and every one a person who is not the owner saves, is pending, and no prompt has it until the owner approves it: what Pi read anywhere in its context could have talked it into one. Pi's (or a guest's) new text for a lesson in force, and Pi's forgetting one, are a `proposal` on the lesson, which stays as it was until the owner approves or discards it. The tool's result names the lesson (`details.lesson`), so the transcript offers Approve and Discard under the call. An approval names what it saw (`POST …/memory/:id/approve` with `{ text }` or `{ forget: true }`); when what waits differs, `change` answers 409, so text or a proposal swapped after the owner looked is not approved with it. Pi proposing the text in force withdraws its own waiting proposal. Pending lessons do not count toward a project's or everywhere's cap; approving one does. Only the owner, or whoever saved a lesson, changes or removes it, Pi included (as the person it works for).
+- Pi's adds carry the tool call's key, so a replayed call finds its lesson. A subagent's lesson comes from its session (`rootOf`).
+- Every write adds an activity line to the session's chat in the same commit. `#committed` tells `Memory` when the document changed; it sends tabs a `memory` event, and the Memory sheet and menu fetch the lessons again (`GET /api/c/:id/memory`).
+
+**PiP's pending queue.** `GET /api/c/:id/memory?pending=all` lists new lessons and proposed edits or forgetting across every project and everywhere. It requires the human owner and their private PiP root as its anchor; queue approvals and discards use the same query on the existing mutation routes. Pi writers, other people, shared-session anchors, and queue add/edit/remove requests are refused before cross-project lookup. Approval retains the existing compare-with-what-was-shown check, limits, and transaction. Activity stays in the private PiP chat, not a shared session. The queue response has `pendingAll: true`, no project or add/edit controls, and project labels on lessons; an older running server's scoped response has no marker, so the new UI asks for a restart rather than claiming to show all projects. Browser memory fetches are keyed by person, role, conversation, and view, and refresh on memory events or a new connection.
+
+## Startup
+
+`PocketApp.#open` runs in this order, and the order matters:
+
+1. Take the data folder's lock. Set up push, Pi's settings, and the HTTP settings for provider streams.
+2. Load the models, and register the core tasks and every extension module that is on.
+3. Open the storage and the harness.
+4. `#recover`:
+    - read the session list;
+    - for each conversation, in turn: its run, agent, chat, who Pi works for (`attribution.recover`), and its subagents;
+    - then write back, in one commit, the authors that a crash kept out of the authors documents (`attribution.repair`).
+5. Load spend.
+6. Subscribe to commits, approvals, and browser pages.
+7. Warm Lancet Guard.
+8. Restore Terminal extensions' interrupted operation records and dynamic tool registry, if enabled.
+9. Resume the work the last process left unfinished.
+
+Work resumes last, so that everything that follows commits is listening before the first one comes.
+
+## The commit coordinator
+
+Pi Durable publishes each commit's changes in no set order. `#committed` handles them in two passes:
+
+1. **Usage first** (`spend.usageChanged`): what a commit's usage cost belongs to whoever Pi worked for before a message in the same commit changes that.
+2. **Then each change:**
+    - Document changes go to `#documentCommitted`. It tracks busy and ended runs, agents, the session list, and the documents the rooms show (`ROOM_DOCS`).
+    - Submissions go to `attribution.submissionCommitted`.
+
+Everything here is synchronous. A commit listener may not call the harness's session APIs, so a write it causes (noting a message's author, or moving a session up the list when Pi starts work there) runs in `setImmediate`. Keep this one coordinator: separate listeners would make their registration order a billing rule nobody can see.
+
+Updates to tabs are coalesced:
+
+| What                                                                       | How often, at most |
+| -------------------------------------------------------------------------- | ------------------ |
+| A room's changes                                                           | Every 90 ms        |
+| Peek tiles                                                                 | Once a second      |
+| The session list, and every subagent to tabs that show the subagents board | Every 400 ms       |
+
+Each room update sends a tab its new entries, the live run, and some small fields. The fields that grow with the session, such as the queue, authors, reactions, and pins, go again only when they differ from what the tab has, because a turn sends an update every 90 ms. The queue sends the first 500 characters of each waiting message's own text (not the files it mentions, and not images: a message of images alone says how many), and the names of the subagents in a message of reports. Its row shows one line, and a paste or a batch of reports can be megabytes. A tab's connection names what its code understands (`p`, `PROTOCOL` in `web/store.js`): a tab with code from before, as one asleep through an update keeps, names none, and gets the queue with each update, because its code drops a queue that an update leaves out.
+
+## Who Pi works for
+
+A message to Pi names its person in its request id (`requests.ts`):
+
+- `u:<user>:<key>` is a person's own message.
+- `p:<user>:<key>` is one sent for a person, such as a scheduled message or a subagent's task.
+
+`attribution.ts` notes each one in the conversation's authors document. Pi works for whoever wrote the newest message (`requesterOf`). A subagent works for whoever its parent worked for when it sent the subagent its last message. Spend, approvals (the "someone else must allow" rule), schedules, and subagents all ask `requesterOf`. A message sent for someone must carry that person in its request id. One that names nobody does not change whom Pi works for: Pi goes on working for whoever it worked for before. Spend, when nobody is known, falls back to whoever started the session, then the owner.
+
+## A request
+
+`http.ts` routes by the first path segment, and turns whatever a route throws into an answer: an `HttpError`'s status and message, or a logged 500.
+
+`/api` (`http/api.ts`) checks, in this order:
+
+1. who is signed in (the cookie, or a bearer token);
+2. it notes the quick tunnel a guest came through;
+3. the `X-Pocket` header, on everything but GET.
+
+A conversation's routes (`/api/c/:id`) run only after `requireSee`.
+
+`/api/x/:module/…` (`http/extension-routes.ts`) is an extension module's own route: after the checks above, and the `X-Pocket` header on a GET too (a module's GET may change things, and the cookie goes along with a link from another site), it answers only the people its `access` lets in (`mayUse`: the owner by default; never someone invited to one session). The header is checked before the route is looked up, and a route someone may not use is not there for them (404, and a 405 names only methods they may use), so nobody learns of routes that are not theirs. A `:name` part that decodes to `..` or holds a backslash or NUL is a 400. Only the owner reads a 500's words, but for those a module gave `web.error`, which it chose to show. `/x/:module/:rev/…` serves its browser module's files, outside `/api` but after a sign-in, to the same people: one file, or a folder's regular web files up to 8 MB, never its `.ts` files, hidden files, `node_modules`, or anything reached through a link. Each is opened without following a link or waiting (`O_NOFOLLOW | O_NONBLOCK`), and read only when its handle is a regular file and the file that was checked (the same device and inode, and on Linux the path `/proc/self/fd` gives), so nothing swapped in after the check, a folder on its way included, is read. Where there is no `/proc` (macOS), a folder swapped for a link within the check itself can still lead elsewhere: only someone who can write in the module's folder can do that, and they can already run code in the server, by editing the module.
+
+Where the other checks live:
+
+- **Commands and collaboration** check steering and driving themselves (`requireSteer`, `requireDriver`). They are called from routes, from tasks, and from each other.
+- **Owner-only settings** are checked in `http/api.ts`: extension modules, provider sign-ins, restart. Changing people's access, the approval rule, the default model for new sessions, and the models subagents may use is checked in `app.ts`.
+- **Invites** are checked in `http/api.ts` too: viewers and people invited to one session cannot create them, and only the owner makes an owner invite. An invite lasts one of `INVITE_MINUTES` (`auth.ts`; an owner invite, always 15) and is kept in `config.json` by its code's hash, so a day's or a week's outlives a restart. Only whoever made one ends it early (`POST /api/invite/cancel`), as the invite sheet does with the one it showed when its settings change, and with one that answers after it closed. One person keeps at most `MAX_INVITES` (`config.ts`) live, their oldest ending first; removing someone ends theirs, and a new owner token ends owner invites not yet used.
+- **The workspace's path helpers** (`conversationFile`, `readableFile`) leave seeing the conversation to their caller.
+
+Each browser tab is a `Client` (`room.ts`), fed by an event stream or by long polling (`http/events.ts`). On connecting, a tab gets:
+
+1. `hello`;
+2. the session list;
+3. then, when it shows a conversation, the room's full view;
+4. then only what changed.
+
+## The web app
+
+Plain ES modules, served as they are, with no build. Editing a file under `web/` reloads every open tab, and a syntax error blanks the screen for everyone.
+
+**Loading order matters.** `store.js` is the root, and a few modules do work when they load (listed in [map.md](map.md#web-web-preact-and-htm-no-build)). `theme.js` must load before anything that reads `prefs()` as it loads. `store.set` calls subscribers in the order they subscribed. When moving code between modules, keep both orders. `back.js` sits under `store.js` and imports nothing of the app's, so anything may use it.
+
+**Live thinking (`transcript.js`).** `theme.js` owns the browser's opt-in; the tab keeps each session's disclosure state. Only an open disclosure selects and draws a thought, memoized separately from the live timer. The active generation, or the latest saved response in the current turn during tools, is authoritative even when it has no thinking. Response and block identity reset follow-scroll for a new thought; only that response's handoff to storage keeps the reader's position.
+
+**Launcher openings (`app.js`, `launcher.js`).** `LauncherHost` observes store transitions synchronously, before Preact batches renders, and keys each logical opening separately. A rapid close/reopen therefore gets a fresh query, selection, and theme-commit flag even when the outgoing launcher is still present for its fade-out. The launcher focuses after DOM reconciliation and isolates its background only while open. Large primary windows use `aria-hidden` and a focus guard, rather than the costly native `inert` traversal of thousands of controls; the overlay blocks pointer access. Other background layers use `inert`. Attribute observers keep the owners' current intent through retained-layer transitions, and close restores that intent before destination focus is restored. Its combobox keeps focus while arrows or Tab move the active option; search-type buttons are a separate group outside the listbox. Field highlights do not change the fuzzy scorer's text or group-first ordering.
+
+**History is the back stack (`back.js`).** Only `back.js` writes history. Each route (`/s/12`) and each layer over it (a sheet, the drawer, the launcher, the Files tile or Browser panel where they cover the screen, a file over the tile's tree) is an entry, and each entry says how many layers it stands for and how many steps back the session list's entry is. The app's state is the truth and history follows it a moment later: opening a layer pushes an entry, closing one with a tap goes back past it, and a new route first goes back past the layers above the current one. Back that the person makes closes the layers above the entry it lands on; back to another route reaches `store.js` through `onRoute`. Traversals `back.js` makes itself reach no one. So:
+
+- Navigate with `navigate()` (which calls `pushRoute`); do not call `history.pushState` or `history.back()` elsewhere. To drop a query from the address, use `replaceAddress`, which keeps the entry's marks.
+- Something new that covers the screen, or that back should close, is a layer: `useBack(open, close)` in the component that shows it, where `close` makes `open` false. Sheets get theirs from `sheets.js`, one per sheet opened from another (the menu, then the model picker).
+- On phones the window clips sideways: the conversation sliding in from the right (a route, a swipe's lean) would make the page wider than the screen, and a phone's browser widen and pan its view to fit.
+- A finger's or a mouse's press and click within 280 ms of a layer opening or closing, or a route opening, at a tap (a pointer let go in the 400 ms before) is let go, focus and all: a quick second tap would land on whatever slid in under it (a tile of the sheet that rose, the scrim that closes it). What moves on its own (a reply opening a session, the server closing a sheet, Escape) holds nothing back, and keys and scripts never are.
+- New entries wait for the page's first tap or key, since Chrome's back button skips entries a page adds before anyone touches it: the list's entry under a conversation opened straight away on a narrow screen, and the entries of layers already open at load (the chat a notification opened, a panel the tab kept).
+
+**PiP chat (`pip.js`, `pip-attachments.js`).** The panel's uploads, submits, image thumbnails, and Markdown image paths use its own conversation ID, never the session behind it. The browser-only attachment draft outlives panel mounts, scopes itself to account and PiP ID, and holds upload identities and submit tokens so late callbacks cannot restore removed files or clear newer drafts. Unknown authentication or conversation IDs during reconnect are not a scope change. Files survive closing and reopening the panel, not a page reload; text keeps its existing local-storage draft. The normal upload and submit endpoints retain their size, file-access, and image-capability checks; PiP does not choose another model for an attachment. Opening the pending-memory sheet uses the private PiP ID even on Home. Panel cleanup restores focus only if it is still in the outgoing panel or on the body, not when a destination sheet already took it.
+
+**PiP resize (`pip-window.js`).** Resize uses pointer capture on the same edge/corner zones for mouse and touch, at widths of 768px and above. The preferred size is local to the account/browser; CSS clamps it to the viewport without overwriting it.
+
+**Extensions' browser modules (`extension-ui.js`).** `hello` lists the browser modules a person's tabs load (`server.ui`: each module's name, title, and address, with its version in it). The tab imports each, and imports it again when its address changes: the server sends `hello` again when a browser module comes, goes, changes who it is for, or one of the files it serves changes (`ExtensionWebs` watches its folders). A reload that leaves all that as it was leaves the address as it was, so tabs keep the browser module they loaded (they may hear `hello` again for other reasons). Event streams and poll queues cut off a tab more than 8 MB behind that took nothing for 30 s, or any tab 128 MB behind (`http/events.ts`); it connects again and gets a full view. A large first view is no reason: the tab has had no time to take it. A polling tab with an answer on its way is taking it until it polls again (one that never does ends 60 s after its last poll or answer), and a stream's ping checks too, so a stalled tab is cut off with no new events for it. A browser module is meant to add only through `pocket` (it runs in the page, so nothing stops it from more), and one that throws is caught there: its notice, its row in the Extensions sheet, its page's error box. One that failed stays listed (`dead`) but adds nothing more. Its events come as `ext` (`{ module, event, data }`). When a module goes, `sheets.js` takes its sheets out of the ones back would bring back (`onExtensionsGone`). A tab in safe mode (`?noext=1`, kept as `pocket.noext` in session storage) loads none of them.
+
+**Contracts with the server.**
+
+- Event names and shapes (`hello`, `view`, `chat`, `peek`, `subagents`, `ext`, …) and the sheet types the server names (`sheet: "chat"`).
+- The `pocket.*` keys in local and session storage.
+- Extensions' API: `web` on the server and `pocket` in the browser, at `POCKET_API`. Modules outside this repository depend on them: add to them freely, and change what they do only with a new version.
+- `ATTACHMENTS_HEADING`, which `ui.js` repeats from `entry-format.ts`.
+
+## Checking a change
+
+- **Every change:** `npm run check` (types, and no unused imports or locals in the TypeScript), `npm run lint`, and `npm test`.
+- **Server:** the tests drive a real `PocketApp` with a scripted model, a restart included (`openApp` on the same folder). The built-in browser and peek tiles also run in a real Chromium where one is installed.
+- **Web:**
+    - `node --check` each file you edit.
+    - Then open the app and use what you changed, with the console open.
+    - A change that moves code between modules is a move only when the moved code is the same and the loading order above is kept.
 
 ## Agent Teams
 
@@ -144,134 +298,3 @@ Browser views contain portable statuses/widgets
 and only the current person's pending dialogs, not the stored SDK ledger. See
 [terminal-extensions.md](terminal-extensions.md) for the supported compatibility boundary and the
 acceptance/verification record.
-
-## PiP's conversation
-
-PiP (`pip.ts`) is a conversation with a `pip` mark in its session entry, which `sessions()` leaves out of every list. The harness settings select every installed extension but PiP's (`pocket-pip`) by default; PiP's conversation stores its own selection (`PIP_EXTENSIONS`, without bash, write, or edit), which `ensure` sets again each time it opens, so PiP's tools reach no other conversation. Its tools act through `Commands` and `Schedules` as PiP's person, with that person's checks, so `canSee` keeps every PiP from everyone but its person: anyone who could write to it would act as them. Its messages to sessions are once per tool call (a request id hashed from the call's key), and each follow leaves a mark in its list (`FollowsDoc`) when it reports or is stopped, so a replayed call neither sends nor follows twice. A tab's PiP panel is a second client in PiP's room (`setPip`), whose `view` events reach the tab as `pipview`; `watching` counts it, so PiP's answers push nothing while it shows.
-
-## Work from outside the app
-
-A PR watch (`watches.ts`) is a `WatchDoc` in its session and a durable task there, which sleeps until its next look, looks with `gh` (`watches.gh`, which tests replace), and puts what to tell Pi in its checkpoint before sending it: the send's request id is the watch's task and count, so a restart sends it once. Comment ids told, and the commits whose failures and conflicts were told, stay in the watch. Webhooks (`hooks.ts`) are app-wide (`HooksDoc`); `/hook/…` is outside `/api` and its sign-in, and lets a post in only by its hook's secret. Both send through `Commands.submit` as their person, with a `via` that marks the message (`[via PR watch]`, `[via webhook NAME]`), so that person's checks and spend limit apply, and what came from outside is fenced (`fence.ts`, as PiP's session text is): no closing tag survives inside, in any case or spacing. A hook's address and secret are checked before its body is read. A signed hook (`signed`, for GitHub) lets a post in only by GitHub's signature: its secret is never in its address, so the address GitHub shows a repository's admins cannot post. Pi's `watch_pr` names a PR by number, which `gh` finds in the session's own repository, or one elsewhere by address only where `gh`'s account can push (`requirePush` in `github.ts`); what follows `--` is never an option.
-
-A repository watch (`repo-watches.ts`) is an item of the app-wide `RepoWatchesDoc` and a durable task in the conversation it messages (PiP's, or a session's), with the same wait, look, and send phases as a PR watch: a look puts the message in the task's checkpoint, and the send's request id is the task's and its count's, so it goes once. It reads the repository's issues, pulls, workflow runs, releases, and comments through `gh api`, and keeps the ids it told. PiP's tools (`repo_watch`, `session_watch_pr`, `session_start` with `repo`) act through `Pip` as its person; a repository is worked on or watched only where `gh`'s account can push, and `Pip.checkout` finds a session's checkout whose `origin` is the repository, or clones it once into `repos/`.
-
-## Who chooses models
-
-Only people choose models; Pi, PiP, and Pi Pocket itself never pick one on the side. Everything that runs a model uses one a person chose:
-
-- **Sessions** run on the model someone picked, or on what a new session starts with (`Commands.#defaultModel`): the owner's default, even when it is not signed in now, else the last model picked, else Pi's default, else none.
-- **Subagents** run on their session's model, at its thinking level or lower (`extensions/subagents.ts`). The owner may allow other models (`subagentModels` in `config.json`: `PocketApp.setSubagentModels` replaces the list, and `allowSubagentModel`, behind `POST /api/subagent-models` that the Providers sheet sends, adds or takes off one model, reading and writing the list with no wait between, so changes that come together all count); with none allowed the tool has no model parameter, and the app rebuilds the module when the list changes. Each call checks the list as it is then: a model not on it is refused, and so is work for a subagent already on one; work for a subagent thinking harder than the session lowers it. Before an allowed model is used its sign-in is asked afresh, so a stale mark neither refuses it nor lets it through. A report of a subagent its model or provider failed (by the provider's words: a sign-in, a missing or refused model, a quota) carries the model and tells Pi to stop and tell its person.
-- **Titles, compaction, and PiP's summaries** use the conversation's own model.
-- **PiP** passes a model, or names one in what it sends, only when its person named it in their own words (`pip.ts`, with `model-names.ts`): their own messages (`u:` request ids, from the authors document) since PiP's last new context (with those its last compaction kept), and the standing instructions of the watches and webhooks to PiP that they set up; never a watch PiP set up, what was posted, or what GitHub said.
-- **Sign-ins:** `Providers` asks subscriptions' sign-ins afresh (the owner's Providers sheet, a model a subagent on another model or PiP is about to use, a run that failed on one, a run answered by a marked one) and keeps, in memory, the ones their provider refused to renew. Only subagents on another model (`resolveModel`, `modelProblem`) and PiP (`Providers.problem`) check before use, and refuse their models. Everything else tries the model: a session's own run and a subagent on its session's model fail where people see them, and a run that failed on an expired sign-in marks it; a title that fails is only logged. `modelList` and `agentInfo` mark them, and the owner is told. A check that began before a sign-in or sign-out here marks nothing.
-
-## Memory
-
-Lessons Pi keeps across sessions are one document for the whole app, `MemoryDoc` (`pocket.memory`), by id. Each is for a project or for everywhere. A project is keyed by the real path of its git common folder (`git rev-parse --git-common-dir`), so a repository and all its worktrees share lessons; outside a repository, by the folder itself. `Memory` (`memory.ts`) works out a folder's project (kept a minute per folder) and keeps the rules:
-
-- The memory extension's section renders, before each request, the lessons in force for the conversation's folder: its project's and everywhere's, not pending, oldest first. It reads committed state only, so it renders the same text until a lesson changes. PiP has no project: it gets everywhere's.
-- Pi proposes, the owner approves. Every lesson Pi saves, and every one a person who is not the owner saves, is pending, and no prompt has it until the owner approves it: what Pi read anywhere in its context could have talked it into one. Pi's (or a guest's) new text for a lesson in force, and Pi's forgetting one, are a `proposal` on the lesson, which stays as it was until the owner approves or discards it. The tool's result names the lesson (`details.lesson`), so the transcript offers Approve and Discard under the call. An approval names what it saw (`POST …/memory/:id/approve` with `{ text }` or `{ forget: true }`); when what waits differs, `change` answers 409, so text or a proposal swapped after the owner looked is not approved with it. Pi proposing the text in force withdraws its own waiting proposal. Pending lessons do not count toward a project's or everywhere's cap; approving one does. Only the owner, or whoever saved a lesson, changes or removes it, Pi included (as the person it works for).
-- Pi's adds carry the tool call's key, so a replayed call finds its lesson. A subagent's lesson comes from its session (`rootOf`).
-- Every write adds an activity line to the session's chat in the same commit. `#committed` tells `Memory` when the document changed; it sends tabs a `memory` event, and the Memory sheet and menu fetch the lessons again (`GET /api/c/:id/memory`).
-
-## Startup
-
-`PocketApp.#open` runs in this order, and the order matters:
-
-1. Take the data folder's lock. Set up push, Pi's settings, and the HTTP settings for provider streams.
-2. Load the models, and register the core tasks and every extension module that is on.
-3. Open the storage and the harness.
-4. `#recover`:
-    - read the session list;
-    - for each conversation, in turn: its run, agent, chat, who Pi works for (`attribution.recover`), and its subagents;
-    - then write back, in one commit, the authors that a crash kept out of the authors documents (`attribution.repair`).
-5. Load spend.
-6. Subscribe to commits, approvals, and browser pages.
-7. Warm Lancet Guard.
-8. Restore Terminal extensions' interrupted operation records and dynamic tool registry, if enabled.
-9. Resume the work the last process left unfinished.
-
-Work resumes last, so that everything that follows commits is listening before the first one comes.
-
-## The commit coordinator
-
-Pi Durable publishes each commit's changes in no set order. `#committed` handles them in two passes:
-
-1. **Usage first** (`spend.usageChanged`): what a commit's usage cost belongs to whoever Pi worked for before a message in the same commit changes that.
-2. **Then each change:**
-    - Document changes go to `#documentCommitted`. It tracks busy and ended runs, agents, the session list, and the documents the rooms show (`ROOM_DOCS`).
-    - Submissions go to `attribution.submissionCommitted`.
-
-Everything here is synchronous. A commit listener may not call the harness's session APIs, so a write it causes (noting a message's author) runs in `setImmediate`. Keep this one coordinator: separate listeners would make their registration order a billing rule nobody can see.
-
-Updates to tabs are coalesced:
-
-| What                                                                       | How often, at most |
-| -------------------------------------------------------------------------- | ------------------ |
-| A room's changes                                                           | Every 90 ms        |
-| Peek tiles                                                                 | Once a second      |
-| The session list, and every subagent to tabs that show the subagents board | Every 400 ms       |
-
-## Who Pi works for
-
-A message to Pi names its person in its request id (`requests.ts`):
-
-- `u:<user>:<key>` is a person's own message.
-- `p:<user>:<key>` is one sent for a person, such as a scheduled message or a subagent's task.
-
-`attribution.ts` notes each one in the conversation's authors document. Pi works for whoever wrote the newest message (`requesterOf`). A subagent works for whoever its parent worked for when it sent the subagent its last message. Spend, approvals (the "someone else must allow" rule), schedules, and subagents all ask `requesterOf`. A message sent for someone must carry that person in its request id. One that names nobody does not change whom Pi works for: Pi goes on working for whoever it worked for before. Spend, when nobody is known, falls back to whoever started the session, then the owner.
-
-## A request
-
-`http.ts` routes by the first path segment, and turns whatever a route throws into an answer: an `HttpError`'s status and message, or a logged 500.
-
-`/api` (`http/api.ts`) checks, in this order:
-
-1. who is signed in (the cookie, or a bearer token);
-2. it notes the quick tunnel a guest came through;
-3. the `X-Pocket` header, on everything but GET.
-
-A conversation's routes (`/api/c/:id`) run only after `requireSee`.
-
-Where the other checks live:
-
-- **Commands and collaboration** check steering and driving themselves (`requireSteer`, `requireDriver`). They are called from routes, from tasks, and from each other.
-- **Owner-only settings** are checked in `http/api.ts`: extension modules, provider sign-ins, restart. Changing people's access, the approval rule, the default model for new sessions, and the models subagents may use is checked in `app.ts`.
-- **Invites** are checked in `http/api.ts` too: viewers and people invited to one session cannot create them, and only the owner makes an owner invite. An invite lasts one of `INVITE_MINUTES` (`auth.ts`; an owner invite, always 15) and is kept in `config.json` by its code's hash, so a day's or a week's outlives a restart. Only whoever made one ends it early (`POST /api/invite/cancel`), as the invite sheet does with the one it showed when its settings change, and with one that answers after it closed. One person keeps at most `MAX_INVITES` (`config.ts`) live, their oldest ending first; removing someone ends theirs, and a new owner token ends owner invites not yet used.
-- **The workspace's path helpers** (`conversationFile`, `readableFile`) leave seeing the conversation to their caller.
-
-Each browser tab is a `Client` (`room.ts`), fed by an event stream or by long polling (`http/events.ts`). On connecting, a tab gets:
-
-1. `hello`;
-2. the session list;
-3. then, when it shows a conversation, the room's full view;
-4. then only what changed.
-
-## The web app
-
-Plain ES modules, served as they are, with no build. Editing a file under `web/` reloads every open tab, and a syntax error blanks the screen for everyone.
-
-**Loading order matters.** `store.js` is the root, and a few modules do work when they load (listed in [map.md](map.md#web-web-preact-and-htm-no-build)). `theme.js` must load before anything that reads `prefs()` as it loads. `store.set` calls subscribers in the order they subscribed. When moving code between modules, keep both orders. `back.js` sits under `store.js` and imports nothing of the app's, so anything may use it.
-
-**History is the back stack (`back.js`).** Only `back.js` writes history. Each route (`/s/12`) and each layer over it (a sheet, the drawer, the launcher, the Files tile or Browser panel where they cover the screen, a file over the tile's tree) is an entry, and each entry says how many layers it stands for and how many steps back the session list's entry is. The app's state is the truth and history follows it a moment later: opening a layer pushes an entry, closing one with a tap goes back past it, and a new route first goes back past the layers above the current one. Back that the person makes closes the layers above the entry it lands on; back to another route reaches `store.js` through `onRoute`. Traversals `back.js` makes itself reach no one. So:
-
-- Navigate with `navigate()` (which calls `pushRoute`); do not call `history.pushState` or `history.back()` elsewhere. To drop a query from the address, use `replaceAddress`, which keeps the entry's marks.
-- Something new that covers the screen, or that back should close, is a layer: `useBack(open, close)` in the component that shows it, where `close` makes `open` false. Sheets get theirs from `sheets.js`, one per sheet opened from another (the menu, then the model picker).
-- On phones the window clips sideways: the conversation sliding in from the right (a route, a swipe's lean) would make the page wider than the screen, and a phone's browser widen and pan its view to fit.
-- A finger's or a mouse's press and click within 280 ms of a layer opening or closing, or a route opening, at a tap (a pointer let go in the 400 ms before) is let go, focus and all: a quick second tap would land on whatever slid in under it (a tile of the sheet that rose, the scrim that closes it). What moves on its own (a reply opening a session, the server closing a sheet, Escape) holds nothing back, and keys and scripts never are.
-- New entries wait for the page's first tap or key, since Chrome's back button skips entries a page adds before anyone touches it: the list's entry under a conversation opened straight away on a narrow screen, and the entries of layers already open at load (the chat a notification opened, a panel the tab kept).
-
-**Contracts with the server.**
-
-- Event names and shapes (`hello`, `view`, `chat`, `peek`, `subagents`, …) and the sheet types the server names (`sheet: "chat"`).
-- The `pocket.*` keys in local and session storage.
-- `ATTACHMENTS_HEADING`, which `ui.js` repeats from `entry-format.ts`.
-
-## Checking a change
-
-- **Every change:** `npm run check` (types, and no unused imports or locals in the TypeScript), `npm run lint`, and `npm test`.
-- **Server:** the tests drive a real `PocketApp` with a scripted model, a restart included (`openApp` on the same folder). The built-in browser and peek tiles also run in a real Chromium where one is installed.
-- **Web:**
-    - `node --check` each file you edit.
-    - Then open the app and use what you changed, with the console open.
-    - A change that moves code between modules is a move only when the moved code is the same and the loading order above is kept.

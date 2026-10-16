@@ -2,10 +2,16 @@
 // and thinking level new sessions start with.
 import { useEffect, useRef, useState } from "preact/hooks";
 import { actions, api, attempt, closeSheet, openSheet, store } from "../store.js";
-import { anchorStyle, formatTokens, html, Icon, popAnchor } from "../ui.js";
+import { modelRefreshAvailable, RefreshModels } from "../model-refresh.js";
+import { useDragToClose } from "../gestures.js";
+import { anchorStyle, BOTTOM_SHEETS, formatTokens, html, Icon, popAnchor } from "../ui.js";
 
 /** Models past this many get a search box in the picker. */
 const MODEL_SEARCH_AT = 8;
+
+/** Over the message box the picker is 330px wide; on a phone, the width `popAnchor` gives. */
+const widthOf = (anchor) =>
+    matchMedia("(min-width: 700px)").matches ? Math.min(anchor.width, 330) : anchor.width;
 
 const coarsePointer = matchMedia("(pointer: coarse)").matches;
 
@@ -41,25 +47,43 @@ export function defaultLabel(chosen, models) {
  * menu), it picks the model and thinking level new sessions start with instead, and stays open for both.
  */
 export function ModelPicker() {
-    const { models, view, server, me } = store.state;
+    const { models, server, me } = store.state;
+    const [pipId] = useState(() => store.state.sheet?.pipId);
+    const view = pipId === undefined ? store.state.view : store.state.pipView;
+    const locked =
+        pipId !== undefined &&
+        (view.conversation?.id !== pipId ||
+            view.live?.busy === true ||
+            (view.live?.compactions?.length ?? 0) > 0);
+    const configure = (change) =>
+        pipId === undefined
+            ? actions.configure(change)
+            : api(`c/${pipId}/configure`, { ...change, pipPanel: true });
     // While the picker animates out, the store has no sheet any more.
     const [query, setQuery] = useState(store.state.sheet?.query ?? "");
     const [forDefault] = useState(() => store.state.sheet?.forDefault === true);
-    const [forPip] = useState(() => store.state.sheet?.forPip === true);
-    const [target] = useState(() => (forPip ? store.state.pip?.id : null));
-    const centered = forDefault || forPip;
-    const configure = (change) =>
-        forPip ? api(`c/${target}/configure`, change) : actions.configure(change);
+    const scopedModels = models.filter((model) => model.scoped);
+    const [showAll, setShowAll] = useState(false);
+    const choices = showAll || scopedModels.length === 0 ? models : scopedModels;
     // Decided once: a search box that went away when emptied would take the caret with it.
     const [searchable] = useState(() => models.length > MODEL_SEARCH_AT || query !== "");
     const [picked, setPicked] = useState(0);
-    const [anchor, setAnchor] = useState(() => (centered ? null : modelAnchor()));
+    const [anchor, setAnchor] = useState(() =>
+        forDefault || pipId !== undefined ? null : modelAnchor(),
+    );
     const box = useRef(null);
     const search = useRef(null);
     const list = useRef(null);
     // Arrows scroll the list to the model they reach; the mouse does not, or the list would run away under it.
     const keyed = useRef(false);
-    const agent = forPip ? store.state.pipView.agent : view.agent;
+    const agent = view.agent;
+
+    // On a phone, a swipe away from where it opens closes it, as a sheet's does.
+    useDragToClose(box, {
+        dir: anchor?.down ? "up" : "down",
+        onClose: closeSheet,
+        enabled: BOTTOM_SHEETS.matches,
+    });
     const owner = me?.role === "owner";
     const chosen = server?.defaultModel ?? null;
     const isDefault = (model) =>
@@ -76,7 +100,7 @@ export function ModelPicker() {
         : agent?.thinkingLevel;
     const reasoning = forDefault ? defaultModel?.reasoning : agent?.reasoning;
     const needle = query.trim().toLowerCase();
-    const shown = models
+    const shown = choices
         .filter(
             (model) =>
                 needle === "" ||
@@ -101,7 +125,7 @@ export function ModelPicker() {
 
     useEffect(() => {
         // The default's picker has no chip to open from: it stays in the middle.
-        const place = () => setAnchor(centered ? null : modelAnchor());
+        const place = () => setAnchor(forDefault || pipId !== undefined ? null : modelAnchor());
         const onKey = (event) => event.key === "Escape" && closeSheet();
 
         addEventListener("resize", place);
@@ -128,6 +152,10 @@ export function ModelPicker() {
     }, [active]);
 
     const pick = (model) => {
+        if (locked) {
+            return;
+        }
+
         // The default's picker stays open, for its thinking level.
         if (forDefault) {
             return isCurrent(model) ? undefined : setDefault(model, level);
@@ -171,26 +199,57 @@ export function ModelPicker() {
 
     return html`<div
         class="overlay pop-overlay"
-        onClick=${(event) => event.target === event.currentTarget && closeSheet()}
+        onMouseDown=${(event) => event.target === event.currentTarget && closeSheet()}
     >
         <section
-            class=${`pop-menu ${anchor ? (anchor.down ? "down" : "") : "free"}`}
-            style=${anchorStyle(anchor)}
+            class=${`pop-menu model-menu ${anchor ? (anchor.down ? "down" : "") : "free"}`}
+            style=${anchorStyle(anchor && { ...anchor, width: widthOf(anchor) })}
             ref=${box}
             role="dialog"
-            aria-label=${forDefault ? "Default model" : forPip ? "PiP model" : "Model"}
+            aria-modal="true"
+            aria-label=${forDefault ? "Default model" : pipId !== undefined ? "PiP model" : "Model"}
             tabindex="-1"
             onKeyDown=${onKeyDown}
         >
+            <div class="grip" aria-hidden="true"></div>
             <header class="pop-menu-head">
                 <span>
-                    ${forDefault ? "Default model" : forPip ? "PiP model" : "Model"}
+                    ${forDefault ? "Default model" : pipId !== undefined ? "PiP model" : "Model"}
                     ${forDefault && html`<span class="pop-menu-head-sub">for new sessions</span>`}
                 </span>
                 <button class="pop-menu-link" onClick=${() => openSheet({ type: "providers" })}>
                     <${Icon} name="key" size=${13} /> Providers
                 </button>
             </header>
+            ${
+                scopedModels.length > 0 &&
+                html`<div class="model-scope-wrap">
+                    <div class="segmented model-scope" role="group" aria-label="Model scope">
+                        <button
+                            class=${!showAll ? "on" : ""}
+                            aria-pressed=${!showAll}
+                            title="Models from Pi’s enabledModels setting"
+                            onClick=${() => {
+                                setShowAll(false);
+                                setPicked(0);
+                            }}
+                        >
+                            Scoped · ${scopedModels.length}
+                        </button>
+                        <button
+                            class=${showAll ? "on" : ""}
+                            aria-pressed=${showAll}
+                            title="All models with a configured sign-in"
+                            onClick=${() => {
+                                setShowAll(true);
+                                setPicked(0);
+                            }}
+                        >
+                            All · ${models.length}
+                        </button>
+                    </div>
+                </div>`
+            }
             ${
                 searchable &&
                 html`<label class="search pop-menu-search">
@@ -221,9 +280,10 @@ export function ModelPicker() {
                 ${shown.map(
                     (model, index) => html`<button
                         key=${`${model.provider}/${model.id}`}
-                        class=${`pop-menu-row ${index === active ? "on" : ""}`}
+                        class=${`pop-menu-row ${index === active ? "on" : ""} ${isCurrent(model) ? "current" : ""}`}
                         role="option"
                         aria-selected=${isCurrent(model)}
+                        disabled=${locked}
                         title=${`${model.provider}/${model.id} · ${formatTokens(model.contextWindow)} context${model.images ? " · images" : ""}`}
                         onMouseMove=${() => index !== active && setPicked(index)}
                         onClick=${() => pick(model)}
@@ -248,6 +308,7 @@ export function ModelPicker() {
                                 html`<button
                                     role="radio"
                                     aria-checked=${level === each}
+                                    disabled=${locked}
                                     class=${level === each ? "on" : ""}
                                     onClick=${() => think(each)}
                                 >
@@ -258,27 +319,30 @@ export function ModelPicker() {
                 </div>`
             }
             ${
-                forPip || !defaultsKept()
+                pipId !== undefined || !defaultsKept()
                     ? null
                     : forDefault
                       ? html`<div class="pop-menu-foot pop-menu-default">
+                          <span class="muted">
+                              The owner default wins over project settings. Clear it to use a trusted project's model and thinking defaults for later new sessions. Existing sessions do not change.
+                          </span>
                           ${
                               chosen
                                   ? html`<button
                                         class="pop-menu-link"
                                         onClick=${() => attempt(() => actions.setDefaultModel(null))}
                                     >
-                                        Start with the last model picked instead
+                                        Clear owner default: use project defaults, then last picked
                                     </button>`
                                   : html`<span class="muted">
-                                        None chosen: new sessions start with the last model picked.
+                                        No owner default: new sessions use trusted project defaults, then the last model picked, then Pi's global default.
                                     </span>`
                           }
                       </div>`
                       : html`<div class="pop-menu-foot pop-menu-default">
                           <span class="pop-menu-default-text">
                               <span class="muted">New sessions:</span>
-                              ${" "}${chosen ? defaultLabel(chosen, models) : "the last model picked"}
+                              ${" "}${chosen ? defaultLabel(chosen, models) : "trusted project defaults, then last picked, then Pi global"}
                           </span>
                           ${
                               owner &&
@@ -296,6 +360,10 @@ export function ModelPicker() {
                                     </button>`)
                           }
                       </div>`
+            }
+            ${
+                modelRefreshAvailable() &&
+                html`<div class="pop-menu-foot"><${RefreshModels} /></div>`
             }
         </section>
     </div>`;

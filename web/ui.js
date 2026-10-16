@@ -3,8 +3,8 @@
 import DOMPurify from "dompurify";
 import htm from "htm";
 import { marked } from "marked";
-import { Component, h } from "preact";
-import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
+import { Component, createContext, h } from "preact";
+import { useContext, useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
 import { useDragToClose } from "./gestures.js";
 import { highlight, langOf } from "./highlight.js";
 import { actions, filesShown, notify, openSheet, store } from "./store.js";
@@ -246,6 +246,9 @@ function sanitize(html, fold) {
     for (const code of fragment.querySelectorAll("code")) {
         if (!code.closest("pre, a") && looksLikePath(code.textContent ?? "")) {
             code.dataset.path = code.textContent;
+            // Keys open it too (`openFile` below).
+            code.tabIndex = 0;
+            code.setAttribute("role", "button");
         }
     }
 
@@ -439,8 +442,9 @@ export function Markdown({
     cache = true,
     base = null,
     breaks = true,
+    conversationId,
 }) {
-    const parts = markdownParts(text, undefined, cache, base, breaks);
+    const parts = markdownParts(text, conversationId, cache, base, breaks);
 
     if (parts.length === 1 && parts[0].kind === undefined) {
         return html`<div
@@ -584,6 +588,16 @@ document.addEventListener("click", (event) => {
 
     event.stopPropagation();
     openFile(target.dataset.path);
+});
+
+// Enter or Space on a file path in inline code opens it, as a tap does: it is a button for keys.
+document.addEventListener("keydown", (event) => {
+    const target = event.target.closest?.(".md code[data-path]");
+
+    if (target && (event.key === "Enter" || event.key === " ") && !event.repeat) {
+        event.preventDefault();
+        openFile(target.dataset.path);
+    }
 });
 
 /** Images in rendered markdown open full screen, unless they are links. */
@@ -811,8 +825,11 @@ const ICONS = {
     file: "M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8zM14 3v5h5",
     diff: "M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8zM14 3v5h5M9 11.5h6M12 8.5v6M9 17.5h6",
     back: "M15 18l-6-6 6-6",
+    clock: "M12 21a9 9 0 100-18 9 9 0 000 18zM12 7v5l3 2",
     chevron: "M9 6l6 6-6 6",
     down: "M6 9l6 6 6-6",
+    up: "M12 19V5M5 12l7-7 7 7",
+    eye: "M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12zM12 15a3 3 0 100-6 3 3 0 000 6z",
     search: "M11 18a7 7 0 100-14 7 7 0 000 14zM21 21l-4.3-4.3",
     shield: "M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z",
     external: "M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 01-1 1H5a1 1 0 01-1-1V7a1 1 0 011-1h5",
@@ -826,6 +843,7 @@ const ICONS = {
     tiles: "M3 5h12v14H3zM17 5h4v6h-4zM17 13h4v6h-4z",
     grid: "M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z",
     pin: "M9 4h6M10 4v6l-3 4h10l-3-4V4M12 14v6",
+    star: "M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z",
     palette:
         "M12 3a9 9 0 100 18c1 0 1.5-.8 1.5-1.5 0-.4-.2-.8-.4-1.1-.3-.3-.4-.7-.4-1.1 0-.8.7-1.5 1.5-1.5H16a5 5 0 005-5c0-4.4-4-7.8-9-7.8zM7.5 12.5h.01M9.5 8h.01M14.5 8h.01M17 11.5h.01",
     pulse: "M3 12h4l2-6 4 12 2-6h6",
@@ -839,6 +857,8 @@ const ICONS = {
     logout: "M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10",
     globe: "M12 21a9 9 0 100-18 9 9 0 000 18zM3.5 9h17M3.5 15h17M12 3a14 14 0 010 18M12 3a14 14 0 000 18",
     reload: "M20 12a8 8 0 11-2.3-5.7M20 4v5h-5",
+    copy: "M9 9h10a1 1 0 011 1v10a1 1 0 01-1 1H9a1 1 0 01-1-1V10a1 1 0 011-1zM5 15H4a1 1 0 01-1-1V4a1 1 0 011-1h10a1 1 0 011 1v1",
+    undo: "M9 14L4 9l5-5M4 9h11a5 5 0 010 10h-4",
     phone: "M8 3h8a1 1 0 011 1v16a1 1 0 01-1 1H8a1 1 0 01-1-1V4a1 1 0 011-1zM11 18h2",
     tablet: "M5 4h14a1 1 0 011 1v14a1 1 0 01-1 1H5a1 1 0 01-1-1V5a1 1 0 011-1zM11 17h2",
     monitor: "M3 4h18v12H3zM8 20h8M12 16v4",
@@ -846,10 +866,49 @@ const ICONS = {
     fit: "M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5",
     // Compact: two rules, and what is between them pressed toward the middle.
     compact: "M4 3h16M4 21h16M12 6v5M9 8l3 3 3-3M12 18v-5M9 16l3-3 3 3",
+    // Taking turns: a steering wheel.
+    wheel: "M12 3a9 9 0 1 0 0 18 9 9 0 1 0 0-18zM12 10a2 2 0 1 0 0 4 2 2 0 1 0 0-4zM3.3 11.2l6.7.6M20.7 11.2l-6.7.6M12 14v6.9",
 };
 
-/** An icon's SVG path, for marks drawn outside Preact (gestures.js). */
-export const iconPath = (name) => ICONS[name] ?? "";
+/** How far each key scrolls a sheet's body, by its height. */
+const SCROLL_KEYS = {
+    ArrowDown: 0.1,
+    ArrowUp: -0.1,
+    PageDown: 0.9,
+    PageUp: -0.9,
+    " ": 0.9,
+    End: 1e6,
+    Home: -1e6,
+};
+
+/**
+ * The keys that scroll a page scroll a sheet focused as a whole (as it is when it opens), when its body holds nothing to
+ * focus: a sheet only read, such as Keyboard shortcuts. One with controls keeps its keys (the menu's arrows).
+ */
+function scrollFromKeys(event) {
+    const share = SCROLL_KEYS[event.key];
+    const body = event.currentTarget.querySelector(":scope > .sheet-body");
+
+    if (
+        share === undefined ||
+        event.defaultPrevented ||
+        event.target !== event.currentTarget ||
+        !body ||
+        body.querySelector("a[href], button, input, select, textarea, [tabindex]") ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey
+    ) {
+        return;
+    }
+
+    event.preventDefault();
+    body.scrollTop += (event.shiftKey && event.key === " " ? -1 : 1) * share * body.clientHeight;
+}
+
+/** An icon's SVG path, for marks drawn outside Preact (gestures.js); "" for a name that is not one of the icons. */
+export const iconPath = (name) =>
+    typeof name === "string" && Object.hasOwn(ICONS, name) ? ICONS[name] : "";
 
 /** Text with the letters at `hits` (indexes) marked, as matches of what someone searched for. */
 export function Marked({ text, hits }) {
@@ -881,7 +940,8 @@ export function Marked({ text, hits }) {
     return parts;
 }
 
-export function Icon({ name, size = 20, class: className = "", stroke = 2 }) {
+/** One of the app's icons by `name`, or any 24×24 stroked path as `path` (extensions' own icons). */
+export function Icon({ name, path, size = 20, class: className = "", stroke = 2 }) {
     return html`<svg
         class=${`icon ${className}`}
         width=${size}
@@ -894,7 +954,7 @@ export function Icon({ name, size = 20, class: className = "", stroke = 2 }) {
         stroke-linejoin="round"
         aria-hidden="true"
     >
-        <path d=${ICONS[name] ?? ""} />
+        <path d=${typeof path === "string" ? path : iconPath(name)} />
     </svg>`;
 }
 
@@ -1135,42 +1195,64 @@ export class Boundary extends Component {
 }
 
 /** Sheets come up from the bottom edge below this width, and drag back down to close; above it they are popups. */
-const BOTTOM_SHEETS = matchMedia("(max-width: 699px)");
+/** Phones: sheets from the bottom edge, and menus that a swipe closes. */
+export const BOTTOM_SHEETS = matchMedia("(max-width: 699px)");
+
+/** The sheet host supplies a back action only when another sheet is under this one. */
+export const SheetBack = createContext(null);
 
 /** A bottom sheet on phones, a centered dialog on wide screens. */
-export function Sheet({ title, onClose, children, wide = false, actions = null }) {
+export function Sheet({ title, onClose, children, wide = false, actions = null, className = "" }) {
     const ref = useRef(null);
+    const onBack = useContext(SheetBack);
 
     useDragToClose(ref, { dir: "down", onClose, enabled: BOTTOM_SHEETS.matches });
 
+    // Not the Esc that ends an input method's composing, which belongs to the field.
     useEffect(() => {
-        const onKey = (event) => event.key === "Escape" && onClose();
+        const onKey = (event) =>
+            event.key === "Escape" && !event.isComposing && event.keyCode !== 229 && onClose();
 
         addEventListener("keydown", onKey);
 
         return () => removeEventListener("keydown", onKey);
     }, [onClose]);
-    // Keys go to the sheet, not the message box behind it, unless something inside already took focus.
+    // Keys go to the sheet, not the message box behind it, unless something inside already took focus. Its field marked
+    // autofocus takes them where a keyboard is at hand (the browser skips the attribute, the page already having focus);
+    // on touch screens the sheet does, so no keyboard pops up over it.
     useEffect(() => {
-        if (ref.current && !ref.current.contains(document.activeElement)) {
-            ref.current.focus({ preventScroll: true });
+        const sheet = ref.current;
+
+        if (sheet && !sheet.contains(document.activeElement)) {
+            const field = matchMedia("(pointer: coarse)").matches
+                ? null
+                : sheet.querySelector("[autofocus]");
+
+            (field ?? sheet).focus({ preventScroll: true });
         }
     }, []);
 
     return html`<div
         class="overlay"
-        onClick=${(event) => event.target === event.currentTarget && onClose()}
+        onMouseDown=${(event) => event.target === event.currentTarget && onClose()}
     >
         <section
-            class=${`sheet ${wide ? "wide" : ""}`}
+            class=${`sheet ${wide ? "wide" : ""} ${className}`}
             ref=${ref}
             role="dialog"
             aria-modal="true"
             aria-label=${title}
             tabindex="-1"
+            onKeyDown=${scrollFromKeys}
         >
             <header class="sheet-head">
-                <div class="grip"></div>
+                <div class="grip" aria-hidden="true"></div>
+                ${
+                    onBack &&
+                    html`<button class="icon-button sheet-back" onClick=${onBack} aria-label="Back">
+                        <${Icon} name="back" size=${18} />
+                    </button>`
+                }
                 <h2>${title}</h2>
                 ${actions}
                 <button class="icon-button" onClick=${onClose} aria-label="Close">
@@ -1181,6 +1263,58 @@ export function Sheet({ title, onClose, children, wide = false, actions = null }
         </section>
     </div>`;
 }
+
+/** What Tab reaches in `box`, in order. */
+function tabStops(box) {
+    const all = box.querySelectorAll(
+        'a[href], button, input, select, textarea, iframe, summary, [tabindex], [contenteditable="true"]',
+    );
+
+    return [...all].filter(
+        (each) =>
+            each.tabIndex >= 0 &&
+            !each.disabled &&
+            !each.closest("[inert]") &&
+            (each.checkVisibility?.({ visibilityProperty: true, checkVisibilityCSS: true }) ??
+                each.getClientRects().length > 0),
+    );
+}
+
+// Tab stays in the dialog on top (a sheet, a menu, the Files tile or Browser panel over the app), as in a browser's own
+// modal dialog: past its last control it goes round to the first, and from outside it goes in.
+addEventListener("keydown", (event) => {
+    if (
+        event.key !== "Tab" ||
+        event.defaultPrevented ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey
+    ) {
+        return;
+    }
+
+    const box = [...document.querySelectorAll('[aria-modal="true"]')]
+        .filter((each) => !each.closest("[inert]"))
+        .at(-1);
+
+    if (!box) {
+        return;
+    }
+
+    const active = document.activeElement;
+    const stops = tabStops(box);
+    const toward = event.shiftKey
+        ? Node.DOCUMENT_POSITION_PRECEDING
+        : Node.DOCUMENT_POSITION_FOLLOWING;
+    const more =
+        box.contains(active) &&
+        stops.some((each) => each !== active && active.compareDocumentPosition(each) & toward);
+
+    if (!more) {
+        event.preventDefault();
+        (event.shiftKey ? stops.at(-1) : stops[0])?.focus();
+    }
+});
 
 /**
  * Where a menu opens from the control `selector` names: above it and aligned with it, or below it for a control near the

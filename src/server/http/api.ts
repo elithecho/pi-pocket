@@ -27,6 +27,7 @@ import { serveImage } from "./assets.ts";
 import { browserRoutes } from "./browser-routes.ts";
 import { conversationRoutes } from "./conversation-routes.ts";
 import { createEventStreams } from "./events.ts";
+import { extensionRoute } from "./extension-routes.ts";
 import { type ApiRequest, conversationId, type HttpOptions, json, readJson } from "./io.ts";
 import { pushRoutes } from "./push-routes.ts";
 
@@ -569,6 +570,11 @@ export function createApi(options: HttpOptions, auth: Auth) {
             });
         }
 
+        // Routes extension modules add, each checking who may use it (`extension-routes.ts`).
+        if (first === "x" && second !== undefined) {
+            return extensionRoute(route, parts.slice(1));
+        }
+
         if (first === "extensions" && second === undefined && method === "GET") {
             return json(response, 200, await app.extensions(user));
         }
@@ -601,6 +607,17 @@ export function createApi(options: HttpOptions, auth: Auth) {
             await app.reloadExtension(second);
 
             return json(response, 200, await app.extensions(user));
+        }
+
+        if (
+            first === "models" &&
+            second === "refresh" &&
+            third === undefined &&
+            method === "POST"
+        ) {
+            requireOwner(user);
+
+            return json(response, 200, await app.providers.modelRefresh.refresh());
         }
 
         // For the owner, each subscription's sign-in is asked afresh first (three seconds at most; a mark found later

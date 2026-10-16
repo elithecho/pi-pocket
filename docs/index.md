@@ -12,21 +12,22 @@ For agents (and people) who change how Pi works in Pi Pocket, extend Pi Pocket, 
 
 Each step reaches further than the one before it, and asks more care. Use the first that does the job.
 
-| To change                                                          | Use                                                                         | Read                               |
-| ------------------------------------------------------------------ | --------------------------------------------------------------------------- | ---------------------------------- |
-| How Pi works in one session                                        | The session's instructions (Menu → Instructions for Pi)                     | [customizing.md](customizing.md)   |
-| How Pi works in a project, or everywhere                           | An `AGENTS.md` in the project, or Pi's own in `~/.pi/agent/`                | [customizing.md](customizing.md)   |
-| A procedure Pi should follow on request                            | A skill, or a prompt template: both become slash commands                   | [customizing.md](customizing.md)   |
-| What Pi can do: a new tool, a rule in its prompt, a check on calls | A drop-in extension in `~/.pi-pocket/extensions/`, which the owner turns on | [extensions.md](extensions.md)     |
-| Pi Pocket itself: its screens, its server, a built-in extension    | Its code, while it runs                                                     | [self-editing.md](self-editing.md) |
+| To change                                                          | Use                                                                         | Read                                             |
+| ------------------------------------------------------------------ | --------------------------------------------------------------------------- | ------------------------------------------------ |
+| How Pi works in one session                                        | The session's instructions (Menu → Instructions for Pi)                     | [customizing.md](customizing.md)                 |
+| How Pi works in a project, or everywhere                           | An `AGENTS.md` in the project, or Pi's own in `~/.pi/agent/`                | [customizing.md](customizing.md)                 |
+| A procedure Pi should follow on request                            | A skill, or a prompt template: both become slash commands                   | [customizing.md](customizing.md)                 |
+| What Pi can do: a new tool, a rule in its prompt, a check on calls | A drop-in extension in `~/.pi-pocket/extensions/`, which the owner turns on | [extensions.md](extensions.md)                   |
+| What the app shows: a page, a rail button, a route of your own     | The same drop-in, with a web part                                           | [extensions.md](extensions.md#adding-to-the-app) |
+| Pi Pocket itself: its screens, its server, a built-in extension    | Its code, while it runs                                                     | [self-editing.md](self-editing.md)               |
 
 A drop-in extension survives updates to Pi Pocket and can be turned off from the app; a change to Pi Pocket's code is shared by everyone who uses this copy and can break it for all of them.
 
 ## The documents
 
 - [customizing.md](customizing.md): changing how Pi works without code.
-- [terminal-extensions.md](terminal-extensions.md): configured terminal Pi plugins in Pocket (in development), trust, portable UI, compatibility, reload and acceptance checks.
-- [extensions.md](extensions.md): writing extensions (tools, prompt sections, hooks), with working examples in [examples/](examples/).
+- [terminal-extensions.md](terminal-extensions.md): configured terminal Pi plugins in Pocket, trust, portable UI, compatibility, reload and acceptance checks.
+- [extensions.md](extensions.md): writing extensions (tools, prompt sections, hooks, and pages, buttons, and routes in the app), with working examples in [examples/](examples/).
 - [self-editing.md](self-editing.md): changing Pi Pocket's code while it runs, checking the change, and getting a broken one back.
 - [map.md](map.md): where each part of the code is, and how to add the common things.
 - [architecture.md](architecture.md): how the parts depend on each other, and the orderings they rely on.

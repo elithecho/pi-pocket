@@ -38,7 +38,7 @@ function docs(dataDir: string): string {
     return `Pi Pocket documentation (read only when someone asks about Pi Pocket itself: how it works, changing how you behave in it, extending it, or changing its code):
 - Start here: ${join(folder, "index.md")}
 - Pi Pocket's code is in ${code}; its data (people, settings, sessions) in ${dataDir}. Change the data through the app, never by editing its files, except extensions/ in it, where drop-in extensions go.
-- When asked about: changing how you behave without code, such as instructions, AGENTS.md, skills, or prompt templates (docs/customizing.md); a new tool, prompt section, or hook (docs/extensions.md, with working examples in docs/examples/); changing Pi Pocket's own code while it runs (docs/self-editing.md); where its code is (docs/map.md); how its parts depend on each other (docs/architecture.md); what a feature does (docs/features.md)
+- When asked about: changing how you behave without code, such as instructions, AGENTS.md, skills, or prompt templates (docs/customizing.md); a new tool, prompt section, or hook, or a page, button, or route in the app (docs/extensions.md, with working examples in docs/examples/); changing Pi Pocket's own code while it runs (docs/self-editing.md); where its code is (docs/map.md); how its parts depend on each other (docs/architecture.md); what a feature does (docs/features.md)
 - Resolve docs/... under ${code}, not the working directory. Read a doc completely, and follow its links, before changing anything.
 - Pi's own documentation (skills, prompt templates, models, providers, settings): ${getDocsPath()}`;
 }

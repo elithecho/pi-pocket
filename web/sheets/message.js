@@ -11,7 +11,17 @@ import {
     scoped,
     store,
 } from "../store.js";
-import { copyText, html, Icon, item, modelLabel, replyText, Sheet, writtenText } from "../ui.js";
+import {
+    copyText,
+    html,
+    Icon,
+    item,
+    modelLabel,
+    replyText,
+    Sheet,
+    Switch,
+    writtenText,
+} from "../ui.js";
 import { memoryAvailable } from "./memory.js";
 
 /** The message to Pi a reply answers: the newest one before it. */
@@ -70,12 +80,12 @@ function SendAgain({ prompt, worktree }) {
                 `${model.provider}/${model.id} ${model.name}`.toLowerCase().includes(needle)),
     );
 
-    return html`<div class="group">
-        <div class="group-title">Send again in a new session</div>
-        ${item(`With ${modelLabel(view.agent)}`, () => openBranch(() => actions.resend(prompt.id, { worktree })), "same model")}
-        ${
-            choosing
-                ? html`<label class="search">
+    return html`<div class="group-title">Send again in a new session</div>
+    ${item(`With ${modelLabel(view.agent)}`, () => openBranch(() => actions.resend(prompt.id, { worktree })), "same model")}
+    ${
+        choosing
+            ? html`<div class="message-model-search">
+                <label class="search">
                     <${Icon} name="search" size=${16} />
                     <input
                         autofocus
@@ -84,22 +94,22 @@ function SendAgain({ prompt, worktree }) {
                         onInput=${(event) => setQuery(event.currentTarget.value)}
                     />
                 </label>
-                ${others.map((model) =>
-                    item(
-                        model.name,
-                        () =>
-                            openBranch(() =>
-                                actions.resend(prompt.id, {
-                                    model: { provider: model.provider, modelId: model.id },
-                                    worktree,
-                                }),
-                            ),
-                        html`<span class="mono">${model.provider}</span>`,
-                    ),
-                )}`
-                : item("With another model…", () => setChoosing(true))
-        }
-    </div>`;
+            </div>
+            ${others.map((model) =>
+                item(
+                    model.name,
+                    () =>
+                        openBranch(() =>
+                            actions.resend(prompt.id, {
+                                model: { provider: model.provider, modelId: model.id },
+                                worktree,
+                            }),
+                        ),
+                    html`<span class="mono">${model.provider}</span>`,
+                ),
+            )}`
+            : item("With another model…", () => setChoosing(true))
+    }`;
 }
 
 /** What can be done with one message: fork from it, edit it, send it again, or copy it. */
@@ -122,11 +132,14 @@ export function MessageSheet({ entryId }) {
     const toPi = entry.kind === "user";
     const text = toPi ? writtenText(entry) : replyText(entry);
     const prompt = toPi ? entry : promptBefore(entryId);
-    const copy = () =>
+
+    const copy = () => {
+        closeSheet();
         copyText(text).then(
             () => notify("info", "Copied."),
             () => notify("error", "Could not copy."),
         );
+    };
 
     if (draft !== null) {
         return html`<${Sheet} title="Edit and send again" onClose=${closeSheet}>
@@ -152,25 +165,35 @@ export function MessageSheet({ entryId }) {
     }
 
     return html`<${Sheet} title=${toPi ? "Message" : "Reply"} onClose=${closeSheet}>
+        <div class="message-preview">${text}</div>
         ${
             canBranch &&
             view.conversation.inRepository &&
-            html`<label class="check">
-                <input type="checkbox" checked=${worktree} onChange=${(event) => setWorktree(event.currentTarget.checked)} /> New sessions get a git worktree of their own
-            </label>`
+            html`<div class="sheet-list">
+                <div class="extension message-worktree">
+                    <div class="extension-main">New sessions get a git worktree of their own</div>
+                    <${Switch}
+                        on=${worktree}
+                        label="New sessions get a git worktree of their own"
+                        onChange=${() => setWorktree(!worktree)}
+                    />
+                </div>
+            </div>`
         }
-        ${canBranch && !toPi && item("Fork from here", () => openBranch(() => actions.fork(entry.id, { worktree })), "everything up to this reply")}
-        ${canBranch && toPi && item("Edit and send again…", () => setDraft(text))}
-        ${canBranch && prompt && html`<${SendAgain} prompt=${prompt} worktree=${worktree} />`}
-        ${
-            memoryAvailable() &&
-            canSteer() &&
-            item(
-                "Remember…",
-                () => openSheet({ type: "memory", draft: lessonFrom(text) }),
-                "keep it as a lesson for Pi",
-            )
-        }
-        ${item("Copy text", copy)}
+        <div class="sheet-list message-actions">
+            ${canBranch && !toPi && item("Fork from here", () => openBranch(() => actions.fork(entry.id, { worktree })), "everything up to this reply")}
+            ${canBranch && toPi && item("Edit and send again…", () => setDraft(text))}
+            ${canBranch && prompt && html`<${SendAgain} prompt=${prompt} worktree=${worktree} />`}
+            ${
+                memoryAvailable() &&
+                canSteer() &&
+                item(
+                    "Remember…",
+                    () => openSheet({ type: "memory", draft: lessonFrom(text) }),
+                    "keep it as a lesson for Pi",
+                )
+            }
+            ${item("Copy text", copy)}
+        </div>
     <//>`;
 }

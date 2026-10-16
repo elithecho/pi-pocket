@@ -55,7 +55,7 @@ While it runs: **q** quit · **r** restart server · **a** change access · **o*
 - **Codemode.** On by default: Pi writes short scripts that call its tools, and every call still goes through the same checks.
 - **Lancet Guard.** Off by default; turn it on in Menu → Extensions. With the [specpi-lancet-guard](https://github.com/TannerMidd/SpecPi) Pi package installed and on, risky bash, write, and edit calls wait for someone in the session to approve.
 - **Roles, invites, and limits.** Steer or view-only access, to every session or just one, through one-time links and QR codes, with spend limits per person and per session.
-- **Live-editable.** No build step: edit the web app or an extension and it reloads in place. Add your own extensions in `~/.pi-pocket/extensions/`.
+- **Live-editable.** No build step: edit the web app or an extension and it reloads in place. Add your own extensions in `~/.pi-pocket/extensions/`: tools and checks for Pi, and pages, rail buttons, and routes for the app.
 
 The full tour is in [docs/features.md](docs/features.md).
 
@@ -89,6 +89,10 @@ cd pi-pocket && npm install --ignore-scripts && npm start
 Open the link in Chrome and choose **Add to Home screen**. Run `termux-wake-lock` so Android does not stop Termux.
 
 Lancet Guard needs ONNX Runtime, which may not load on Android. If the guard is on but cannot load, Pi Pocket blocks bash, write, and edit calls (the status line shows "guard failed"). Turn it off in the app (Menu → Extensions), in `~/.pi/lancet-guard.json`, or by starting with `PI_POCKET_GUARD=off`.
+
+## Nix and NixOS
+
+The flake builds Pi Pocket (`nix run github:TannerMidd/pi-pocket`) and has a NixOS module: `services.pi-pocket.enable = true;`. Options include `access`, `openFirewall`, `extensions`, `skills`, and `environmentFile`. The service listens on this machine only, unless you set `access` or `host`. Read the owner's sign-in link with `journalctl -u pi-pocket`. See `nix/module.nix`.
 
 ## Configuration
 
@@ -151,7 +155,7 @@ Pi knows where Pi Pocket's own documentation is: [docs/index.md](docs/index.md) 
 
 ## Credits
 
-Inspired by [Mario Zechner's demo](https://x.com/badlogicgames/status/2106452296087302173) of his own Pi app. Pi Pocket is an independent project, not affiliated with Earendil. JetBrains Mono is bundled under the [SIL Open Font License](web/fonts/OFL.txt).
+Inspired by [Mario Zechner's demo](https://x.com/badlogicgames/status/2106452296087302173) of his own Pi app. Pi Pocket is an independent project, not affiliated with Earendil. JetBrains Mono and Geist are bundled under the SIL Open Font License ([JetBrains Mono](web/fonts/OFL.txt), [Geist](web/fonts/Geist-OFL.txt)).
 
 ## License
 
