@@ -80,7 +80,7 @@ const route: Parameters<typeof scriptedModel>[0] = (request, options, _state, mo
         );
     }
 
-    const address = /^send linked test (chat-[a-f0-9-]+)$/.exec(text);
+    const address = /^send linked test (chat-[a-f0-9-]+)(?: (true|false))?$/.exec(text);
 
     if (address) {
         return fauxAssistantMessage(
@@ -89,6 +89,7 @@ const route: Parameters<typeof scriptedModel>[0] = (request, options, _state, mo
                     action: "send",
                     chat: address[1]!,
                     message: "a peer update",
+                    ...(address[2] === undefined ? {} : { steer: address[2] === "true" }),
                 }),
             ],
             { stopReason: "toolUse" },
@@ -224,6 +225,26 @@ test("the real tool starts a different model at xhigh from an off source, and th
     );
     await say(app, target, "human continuation");
     assert.ok((await modelTexts(app, target)).some((text) => text.includes("human continuation")));
+});
+
+test("peer sends default to steer, with explicit steer and follow-up overrides", async (t) => {
+    const id = await source();
+    const target = await start(id);
+    const address = await app.linkedChats.address(id, Number(target));
+    const submit = t.mock.method(app.commands, "submit");
+
+    for (const [flag, mode] of [
+        ["", "steer"],
+        [" true", "steer"],
+        [" false", "followUp"],
+    ]) {
+        submit.mock.resetCalls();
+        await say(app, id, `send linked test ${address}${flag}`);
+        const peerCalls = submit.mock.calls.filter((call) => call.arguments[0] === target);
+
+        assert.equal(peerCalls.length, 1);
+        assert.equal(peerCalls[0]!.arguments[2].mode, mode);
+    }
 });
 
 test("agent settings are copied once, not inherited thereafter; plan, budget and archive stay independent", async () => {

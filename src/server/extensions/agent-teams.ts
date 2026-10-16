@@ -58,7 +58,8 @@ export default function createAgentTeams(host: PocketHost) {
             ),
             steer: Type.Optional(
                 Type.Boolean({
-                    description: "send: steer at the next pause; default queues a follow-up",
+                    description:
+                        "send: defaults to steering at the next pause; false queues a follow-up",
                 }),
             ),
         }),
@@ -121,7 +122,7 @@ export default function createAgentTeams(host: PocketHost) {
                     api.conversationId,
                     args.chat,
                     args.message,
-                    args.steer === true,
+                    args.steer !== false,
                     key,
                 );
             } catch {
