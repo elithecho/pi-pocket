@@ -56,13 +56,17 @@ starts a normal sidebar chat, lists its visible linked family, and sends peer me
 direction. `SessionMeta.linkedFrom` records origin only: it never enters `SubagentsDoc`, `parentOf`,
 `rootOf`, access inheritance, or cancellation. Folder, instructions and tool selections are copied once
 (not history or terminal state), with conversation-specific terminal tool registrations removed; normal
-terminal preparation installs the new chat's own registrations. Startup requires explicit model and
-thinking choices, resolved against available signed-in models and exact supported levels before any
-creation or receipt. There is no source-model fallback, source thinking cap or nested-subagent model
-allowlist: these are normal independent chats. A created-call replay returns its recorded target before
-new route validation, preserving older receipts without route options. Models and thinking levels are
-not changed by peer sends. The `modelSelection` bridge capability keeps hot-loaded modules from sending
-new route options to an older service that would silently ignore them; a restart is required instead.
+terminal preparation installs the new chat's own registrations. Omitted model and thinking settings are
+copied from the source at creation; either can be
+overridden independently. A model-only override adjusts inherited thinking to the highest supported
+level at or below it (or the lowest supported level if none is lower). Explicit thinking must be
+supported exactly. The chosen model must be available and signed in before any creation or receipt;
+an unavailable explicit model never falls back to another model. There is no source thinking cap or
+nested-subagent model allowlist: these are normal independent chats. A
+created-call replay returns its recorded target before new route validation, preserving older receipts
+without route options. Models and thinking levels are not changed by peer sends. The `modelSelection`
+bridge capability keeps hot-loaded modules from sending new route options to an older service that
+would silently ignore them; a restart is required instead.
 
 `pocket.linked-chat-peers` keeps local opaque UUID addresses for tools and incoming message headers,
 so shared tool history never automatically records another chat's numeric id. Peer discovery withholds
