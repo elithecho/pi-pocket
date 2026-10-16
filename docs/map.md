@@ -70,6 +70,17 @@ A module split into parts keeps its name for the part others import, with the re
 
 `folder-favorites.ts` owns each person's favorite working folders: the `FolderFavoritesDoc` in SQLite, transactional star/unstar operations, and private live updates to their devices. `http/api.ts` exposes `/api/folder-favorites`; `hello.folderFavorites` and the `folder-favorites` event feed the folder picker through `web/store.js`.
 
+### Terminal Pi plugin bridge
+
+`terminal/manager.ts` connects per-conversation child hosts to admission, dynamic tools, lifecycle hooks
+and portable UI. `terminal/worker.ts` runs the SDK, `host.ts` owns child IPC/lifecycle, `protocol.ts`
+validates wire data, `projection.ts` and `entries.ts` build the branch-aware SDK view, and `store.ts`
+commits ordered effects and outbox intents. `extensions/terminal.ts` is the off-by-default module.
+`web/terminal.js` renders portable forms/status/widgets; `web/commands.js` merges plugin suggestions
+and native commands. `web/transcript.js` provides the generic text/image fallback for displayed passive
+messages. `schedules.ts` restores idle hosts before scheduled request preparation. See
+[terminal-extensions.md](terminal-extensions.md) for compatibility and checks.
+
 ### A conversation's folder and history
 
 | File                                   | Owns                                                                                                                                                                                               |

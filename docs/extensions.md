@@ -4,6 +4,10 @@ An extension gives Pi something new: a **tool** it can call, a **section** of it
 
 Extensions are Pi Durable's. Its README covers the parts in depth: `node_modules/@earendil-works/pi-durable/README.md` in Pi Pocket's folder (Extensions, Tools, System Prompt, Hooks, Your Own State). This page is what Pi Pocket adds, and how to write one that holds up.
 
+Configured **terminal Pi plugins** use a separate, off-by-default bridge, not this module contract.
+See [Terminal extensions](terminal-extensions.md) for its trust warning, commands and compatibility
+limits. The native Durable modules documented below keep working independently of that switch.
+
 ## Drop-in or built-in
 
 - **Drop-in**: a file in `~/.pi-pocket/extensions/` (the data folder's `extensions/`). It survives updates to Pi Pocket, starts off, and the owner turns it on in Menu → Extensions. Use this for anything one person or one machine wants.

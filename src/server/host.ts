@@ -4,6 +4,7 @@ import type { Skill } from "@earendil-works/pi-coding-agent";
 import type { ConversationId, Extension, ModelRef, TaskId } from "@earendil-works/pi-durable";
 import type { Browsers } from "./browser.ts";
 import type { Goals } from "./goals.ts";
+import type { TerminalManager } from "./terminal/manager.ts";
 import type { LancetGuard } from "./lancet.ts";
 import type { Memory } from "./memory.ts";
 import type { Pip } from "./pip.ts";
@@ -153,6 +154,11 @@ export interface PocketHost {
     readonly schedules: Pick<Schedules, "add" | "cancel" | "list" | "task">;
     /** Sessions' goals: the goals extension runs their checks and counts them. */
     readonly goals: Pick<Goals, "get" | "run" | "record" | "mayContinue">;
+    /** Optional while a new module is hot-loaded into an older running server. */
+    readonly terminal?: Pick<
+        TerminalManager,
+        "turnStart" | "turnEnd" | "event" | "messageEnd" | "assistant" | "beforeTool" | "afterTool"
+    >;
     /** The built-in browser: a page per conversation, which the people in it watch and use too. */
     readonly browsers: Pick<Browsers, "open">;
     /** PiP, the owner's assistant: what its tools do, each as PiP's person (`pip.ts`). */

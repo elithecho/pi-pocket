@@ -27,6 +27,8 @@ import {
     DecisionsDoc,
     type Goal,
     GoalDoc,
+    TerminalStateDoc,
+    type TerminalWidget,
     type Notes,
     NotesDoc,
     type Pin,
@@ -73,6 +75,7 @@ export const ROOM_DOCS = new Set(
         PlanDoc,
         ScheduleDoc,
         GoalDoc,
+        TerminalStateDoc,
         WatchDoc,
     ].map((doc) => doc.definition.kind),
 );
@@ -243,6 +246,10 @@ export class Room {
     schedules: Record<string, Schedule> = {};
     goal: Goal | undefined;
     watch: PrWatch | undefined;
+    terminal: { statuses: Record<string, string>; widgets: Record<string, TerminalWidget> } = {
+        statuses: {},
+        widgets: {},
+    };
     /** Who is typing where, by user id. Memory only: it means nothing after a restart. */
     readonly #typing = new Map<string, { where: TypingPlace; timer: NodeJS.Timeout }>();
     parent: { id: ConversationId; title: string } | undefined;
@@ -297,6 +304,9 @@ export class Room {
         };
         this.goal = (await harness.snapshot(GoalDoc, this.id, context))?.goal;
         this.watch = (await harness.snapshot(WatchDoc, this.id, context))?.watch;
+        const terminal = await harness.snapshot(TerminalStateDoc, this.id, context);
+
+        this.terminal = { statuses: { ...terminal?.statuses }, widgets: { ...terminal?.widgets } };
 
         if (owner !== undefined) {
             const siblings =
@@ -364,6 +374,11 @@ export class Room {
             this.plan = { on: false, ...((value as Room["plan"] | null) ?? {}) };
         } else if (kind === ScheduleDoc.definition.kind) {
             this.schedules = { ...((value?.items as Record<string, Schedule>) ?? {}) };
+        } else if (kind === TerminalStateDoc.definition.kind) {
+            this.terminal = {
+                statuses: { ...((value?.statuses ?? {}) as Record<string, string>) },
+                widgets: { ...((value?.widgets ?? {}) as Record<string, TerminalWidget>) },
+            };
         } else if (kind === GoalDoc.definition.kind) {
             this.goal = (value?.goal as Goal | undefined) ?? undefined;
         } else if (kind === WatchDoc.definition.kind) {
@@ -495,6 +510,13 @@ export class Room {
             turns: this.turns,
             decisions: this.decisions,
             plan: this.plan,
+            terminal: this.#app.terminal.enabled
+                ? {
+                      ...this.terminal,
+                      dialogs: this.#app.terminal.dialogs(this.id, client.user),
+                      problem: this.#app.terminal.problem(this.id, client.user),
+                  }
+                : null,
             schedules: Object.values(this.schedules)
                 .sort((a, b) => a.next - b.next)
                 .map(({ id, text, next, every, by, runs }) => ({

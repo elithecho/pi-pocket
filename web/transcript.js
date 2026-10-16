@@ -1482,6 +1482,22 @@ function NoteEntry({ entry }) {
     </div>`;
 }
 
+/** Portable fallback: extension content is text, never terminal renderer output or raw HTML. */
+function ExtensionMessage({ entry }) {
+    return html`<section class="extension-message" id=${`entry-${entry.id}`}>
+        <div class="muted small">Pi extension · ${entry.customType}</div>
+        <pre>${entry.text}</pre>
+        ${
+            entry.images > 0 &&
+            html`<${EntryImages}
+            entryId=${entry.id}
+            count=${entry.images}
+            label="Extension image"
+        />`
+        }
+    </section>`;
+}
+
 /** How long a `!` command's row may wait for its entry: past the server's limit for a command, something went wrong. */
 const PENDING_MS = 11 * 60_000;
 
@@ -1549,6 +1565,10 @@ function EntryView({ entry }) {
 
     if (entry.kind === "note") {
         return html`<${NoteEntry} entry=${entry} />`;
+    }
+
+    if (entry.kind === "extension") {
+        return html`<${ExtensionMessage} entry=${entry} />`;
     }
 
     if (entry.kind === "user") {

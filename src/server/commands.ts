@@ -55,6 +55,7 @@ import { clientKey, ownRequest, requestFor } from "./requests.ts";
 import { type Resend, resendContent, resendRequest, ResendTask, userContent } from "./resend.ts";
 import { whyUnanswered } from "./subagent-runs.ts";
 import { wantsTitle, writeTitle } from "./titles.ts";
+import type { HostContent, HostCustomEntry } from "./terminal/protocol.ts";
 import { describeMoment, describeRepeat, knownZone } from "./when.ts";
 import {
     createWorktree,
@@ -79,6 +80,16 @@ export interface SubmitRequest {
     /** Send the files the message mentions with `@` along with it, so Pi need not read them first. */
     inlineFiles?: boolean;
 }
+
+/** Trusted server-only admission of an already validated extension effect, never a raw browser payload. */
+export type TerminalSubmissionRequest = {
+    key: string;
+    content: HostContent;
+    trigger: boolean;
+    delivery: "steer" | "followUp" | "nextTurn";
+    expand: boolean;
+    custom?: HostCustomEntry;
+};
 
 /** Attached images that also go to the model itself, when it takes images. */
 const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
@@ -661,16 +672,41 @@ export class Commands {
     ): Promise<{ submissionId: SubmissionId; requestId: string }> {
         const app = this.#app;
 
-        app.requireSee(user, id);
-        await app.requireDriver(id, user);
+        const conversation = await this.#submissionAccess(id, user);
+        const extension = await app.terminal.match(id, user, request.text);
 
-        // PiP turned off takes nothing, from its person either: it would run without its rules, and be compacted without
-        // its own summary (`pip-compact.ts`). What else goes to it (reports, schedules, watches) waits meanwhile.
-        if (app.pip.ownerOf(id) !== undefined && !app.pip.available(user)) {
-            throw new HttpError(409, "PiP is turned off in Extensions.");
+        if (extension) {
+            if ((request.attachments?.length ?? 0) > 0) {
+                throw new HttpError(
+                    400,
+                    "Extension commands do not send attachments; send those separately",
+                );
+            }
+
+            const requestId = ownRequest(user.id, clientKey(request.requestId));
+            const existing = await app.harness.commit(
+                (tx) => tx.submissionByRequest(id, requestId),
+                context,
+            );
+
+            if (existing) {
+                return { submissionId: existing.id, requestId };
+            }
+
+            await app.terminal.command(id, user, extension.name, extension.args, request.requestId);
+            const receipt = await conversation.submit(
+                {
+                    type: "write",
+                    requestId,
+                    entry: { kind: "pocket.terminal-command", data: { name: extension.name } },
+                },
+                context,
+            );
+
+            return { submissionId: receipt.id, requestId };
         }
 
-        const conversation = await app.conversation(id);
+        await app.terminal.prepare(id, user);
         const typed = request.text.trim();
         // `/skill:name request` sends the skill with the request; `/name arguments`, Pi's prompt template of that name.
         const text = typed.startsWith("/skill:")
@@ -684,18 +720,7 @@ export class Commands {
             throw new HttpError(400, "Nothing to send");
         }
 
-        const agent = await app.agentState(id);
-        const model =
-            agent?.model === undefined
-                ? undefined
-                : app.models.getModel(agent.model.provider, agent.model.modelId);
-
-        if (model === undefined) {
-            throw new HttpError(409, "Pick a model for this conversation first.");
-        }
-
-        app.spend.check(user, id);
-
+        const model = await this.#submissionModel(id, user);
         const lines = attachments.map(
             (file) =>
                 `- ${file.path} (${file.name}, ${file.mime || "unknown type"}, ${file.size} bytes)`,
@@ -754,6 +779,113 @@ export class Commands {
         }
 
         return { submissionId: submission.id, requestId };
+    }
+
+    /** Extension effects use the same admission/access/model/spend policy, without accidental slash redispatch. */
+    async submitTerminal(
+        id: ConversationId,
+        user: User,
+        request: TerminalSubmissionRequest,
+    ): Promise<{ submissionId: SubmissionId; requestId: string }> {
+        const app = this.#app;
+        const conversation = await this.#submissionAccess(id, user);
+        const model = request.trigger ? await this.#submissionModel(id, user) : undefined;
+        let content = request.content;
+
+        if (request.expand && typeof content === "string") {
+            content = content.startsWith("/skill:")
+                ? (expandSkillCommand(content, app.skillCommands(id)) ?? content)
+                : (expandPromptTemplate(content, app.promptTemplates(id)) ?? content);
+        }
+
+        if (
+            Array.isArray(content) &&
+            content.some((part) => part.type === "image") &&
+            model !== undefined &&
+            !model.input.includes("image")
+        ) {
+            throw new HttpError(400, "The selected model does not accept this extension's images");
+        }
+
+        if (!request.trigger && request.custom?.type !== "custom_message") {
+            throw new HttpError(
+                400,
+                "A passive extension message needs its custom-message metadata",
+            );
+        }
+
+        const requestId = requestFor(user.id, clientKey(request.key));
+        const submission = await conversation.submit(
+            request.trigger
+                ? {
+                      type: "input",
+                      content,
+                      requestId,
+                      whenBusy: request.delivery === "steer" ? "steer" : "followUp",
+                  }
+                : {
+                      type: "write",
+                      requestId,
+                      entry: {
+                          kind: "pocket.terminal-message",
+                          model: [{ role: "user", content, timestamp: Date.now() }],
+                          data: { custom: request.custom ?? null },
+                      },
+                  },
+            context,
+        );
+
+        if (request.trigger) {
+            const plain =
+                typeof content === "string"
+                    ? content
+                    : content
+                          .filter((part) => part.type === "text")
+                          .map((part) => part.text)
+                          .join(" ");
+
+            // Extension-generated continuations should not launch separate title-model requests.
+            await this.#touched(
+                id,
+                plain.replace(/\s+/g, " ").trim().slice(0, 80) || "Pi extension message",
+                undefined,
+                "preview",
+            );
+            this.#reportUnanswered(id, submission.wait(context));
+        }
+
+        return { submissionId: submission.id, requestId };
+    }
+
+    async #submissionAccess(id: ConversationId, user: User) {
+        const app = this.#app;
+
+        app.requireSee(user, id);
+        await app.requireDriver(id, user);
+
+        // PiP turned off must never run without its extension's restrictions and compaction rules.
+        if (app.pip.ownerOf(id) !== undefined && !app.pip.available(user)) {
+            throw new HttpError(409, "PiP is turned off in Extensions.");
+        }
+
+        return app.conversation(id);
+    }
+
+    async #submissionModel(id: ConversationId, user: User) {
+        const app = this.#app;
+        const agent = await app.agentState(id);
+        const model =
+            agent?.model === undefined
+                ? undefined
+                : app.models.getModel(agent.model.provider, agent.model.modelId);
+
+        if (model === undefined) {
+            throw new HttpError(409, "Pick a model for this conversation first.");
+        }
+
+        app.spend.check(user, id);
+
+        return model;
     }
 
     /** When a subagent (`id`, its conversation) failed, if it is failed now (not stopped); undefined otherwise. */
@@ -960,7 +1092,12 @@ export class Commands {
      * whose name says little: written from the command and what it `expanded` to, which says what it asks (a skill's
      * instructions without the paths of its files, which would pull the title toward a folder's name).
      */
-    async #touched(id: ConversationId, text: string, expanded?: string): Promise<void> {
+    async #touched(
+        id: ConversationId,
+        text: string,
+        expanded?: string,
+        titlePolicy: "automatic" | "preview" = "automatic",
+    ): Promise<void> {
         if (this.#app.sessionMeta(id) === undefined) {
             return;
         }
@@ -981,7 +1118,11 @@ export class Commands {
             }
         }, context);
 
-        if (provisional !== undefined && (expanded !== undefined || wantsTitle(text))) {
+        if (
+            titlePolicy === "automatic" &&
+            provisional !== undefined &&
+            (expanded !== undefined || wantsTitle(text))
+        ) {
             void writeTitle(
                 this.#app,
                 id,
@@ -1049,9 +1190,16 @@ export class Commands {
 
         // Stop withdraws what waits in the queue, subagents' reports too: a person meant them gone.
         await this.#discardReports(id);
-        void conversation
-            .abort(context)
-            .catch((error: unknown) => app.notice("error", `Abort failed: ${describe(error)}`, id));
+
+        if (app.terminal.enabled || app.terminal.known(id)) {
+            await app.terminal.stop(id, user, () => conversation.abort(context));
+        } else {
+            void conversation
+                .abort(context)
+                .catch((error: unknown) =>
+                    app.notice("error", `Abort failed: ${describe(error)}`, id),
+                );
+        }
 
         if (busy) {
             await app.collab.activity(id, user, "stopped the run");

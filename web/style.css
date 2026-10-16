@@ -5497,6 +5497,52 @@ textarea.notes {
     color: inherit;
 }
 
+/* Portable plugin UI: plain text only, with dialogs kept usable even in a compact dock. */
+.terminal-dialog {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 0.65rem;
+    margin-bottom: 0.35rem;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-left: 2px solid var(--accent);
+}
+
+.terminal-dialog > :is(input, textarea, select) {
+    width: 100%;
+    min-width: 0;
+    min-height: 40px;
+}
+
+.terminal-dialog-message,
+.terminal-dialog > strong,
+.terminal-status > .grow {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.terminal-dialog-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 0.5rem;
+}
+
+.terminal-dialog .terminal-dialog-buttons > .button {
+    min-height: 40px;
+    min-width: 64px;
+}
+
+.terminal-widget > pre {
+    margin: 0;
+    min-width: 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    max-height: 12rem;
+    overflow-y: auto;
+}
+
 /* The trust question keeps its words a readable width: on a phone its answers go under them, together, to the right. */
 .trust-bar > .grow {
     flex: 1 1 15rem;
@@ -10826,4 +10872,16 @@ textarea.notes {
     overflow-wrap: anywhere;
     user-select: all;
     color: var(--accent);
+}
+
+.extension-message {
+    min-width: 0;
+    padding: 12px 0;
+}
+
+.extension-message pre {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font: inherit;
+    margin: 8px 0;
 }

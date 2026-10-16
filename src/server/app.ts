@@ -66,6 +66,8 @@ import {
 import { describe, HttpError } from "./errors.ts";
 import { FolderFavorites } from "./folder-favorites.ts";
 import { Goals } from "./goals.ts";
+import { TERMINAL_EXTENSION, TerminalManager } from "./terminal/manager.ts";
+import { TERMINAL_TOOLS_PREFIX } from "./terminal/projection.ts";
 import { type ApprovalRequest, Approvals, type PocketHost } from "./host.ts";
 import { type GuardStatus, LancetGuard } from "./lancet.ts";
 import { takeLock } from "./lock.ts";
@@ -250,6 +252,7 @@ export class PocketApp {
     readonly providers = new Providers(this);
     readonly schedules = new Schedules(this);
     readonly goals = new Goals(this);
+    readonly terminal = new TerminalManager(this);
     readonly shell = new Shell(this);
     readonly spend = new Spend(this);
     /** Who Pi works for in each conversation, and who wrote and queued each message. */
@@ -294,6 +297,7 @@ export class PocketApp {
     #sessionsTimer: NodeJS.Timeout | undefined;
     /** The extensions installed now: every conversation runs with them, except PiP's own, which PiP alone selects. */
     #registry: Registry | undefined;
+    #extensionRevision = 0;
     #unsubscribeCommits: (() => void) | undefined;
     #unsubscribeApprovals: (() => void) | undefined;
     #unsubscribeBrowsers: (() => void) | undefined;
@@ -420,6 +424,7 @@ export class PocketApp {
             onLimitsChanged: (listener) => this.spend.onLimitsChanged(listener),
             schedules: this.schedules,
             goals: this.goals,
+            terminal: this.terminal,
             browsers: this.browsers,
             pip: this.pip,
             pipCompaction: this.pipCompaction,
@@ -430,6 +435,7 @@ export class PocketApp {
 
         this.host = host;
         this.#registry = registry;
+        this.terminal.attach(registry);
         const dropIn = join(this.dataDir, "extensions");
 
         try {
@@ -510,6 +516,8 @@ export class PocketApp {
             void this.guard.warm().catch(() => {});
         }
 
+        // Reinstall per-conversation plugin tools before Durable can resume a prepared call.
+        await this.terminal.restore(conversations);
         // Work a previous process left unfinished continues now.
         this.harness.resume();
     }
@@ -752,13 +760,22 @@ export class PocketApp {
         const stream = () => this.streamSettings();
 
         return {
-            // Every installed extension, in install order, but PiP's: its tools and prompt are for its conversation only,
-            // which selects it by name (`pip.ts`).
+            // PiP and per-conversation plugin tools are never global defaults. Terminal mutations
+            // must precede native policy hooks even when this off-by-default module is enabled last.
             get extensions() {
                 return registry()
                     ?.snapshot()
                     .installed()
-                    .filter((extension) => extension.name !== PIP_EXTENSION);
+                    .filter(
+                        (extension) =>
+                            extension.name !== PIP_EXTENSION &&
+                            !extension.name.startsWith(TERMINAL_TOOLS_PREFIX),
+                    )
+                    .sort(
+                        (left, right) =>
+                            Number(right.name === TERMINAL_EXTENSION) -
+                            Number(left.name === TERMINAL_EXTENSION),
+                    );
             },
             get stream() {
                 return stream();
@@ -930,6 +947,8 @@ export class PocketApp {
         if (!this.#clients.delete(client)) {
             return;
         }
+
+        this.terminal.disconnected(client.user.id);
 
         for (const id of client.peeks ?? []) {
             this.#unpeek(client, id);
@@ -1531,6 +1550,7 @@ export class PocketApp {
                 home: homedir(),
                 defaultCwd: this.defaultCwd,
                 extensions: this.loader.extensionNames(),
+                extensionRevision: this.#extensionRevision,
                 // Tells the web app this server has people chat and typing indicators.
                 chat: true,
                 // Tells the web app this server sends peek tiles (`POST /api/peeks`, `peek` events).
@@ -2165,6 +2185,7 @@ export class PocketApp {
         }
 
         this.config.setExtensionEnabled(file, enabled);
+        this.#extensionRevision++;
 
         try {
             await this.loader.apply(file);
@@ -2175,6 +2196,10 @@ export class PocketApp {
             );
         } finally {
             await this.#refreshClients();
+        }
+
+        if (file === "terminal.ts") {
+            await this.terminal.resetHosts(!enabled);
         }
 
         if (file === GUARD_FILE && enabled) {
@@ -2206,8 +2231,14 @@ export class PocketApp {
             throw new HttpError(409, `${module.title} is off`);
         }
 
+        this.#extensionRevision++;
+
         try {
             await this.loader.reload(file);
+
+            if (file === "terminal.ts") {
+                await this.terminal.resetHosts();
+            }
         } catch (error) {
             throw new HttpError(500, `${module.title} failed to load: ${describe(error)}`);
         } finally {
@@ -2495,6 +2526,7 @@ export class PocketApp {
             this.#unsubscribeApprovals?.();
             this.#unsubscribeBrowsers?.();
             this.loader?.close();
+            this.terminal.beginClosing();
 
             for (const client of this.#clients) {
                 client.send("closing", {});
@@ -2517,6 +2549,7 @@ export class PocketApp {
                     await env.cleanup(context);
                 }
             } finally {
+                await this.terminal.close();
                 // After the harness: a browser call cut off by the stop resumes as interrupted, not as failed.
                 await this.browsers.closeAll({ final: true }).catch(() => {});
                 rmSync(this.#lockFile, { force: true });

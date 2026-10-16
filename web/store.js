@@ -58,6 +58,7 @@ const emptyView = () => ({
     plan: { on: false },
     schedules: [],
     goal: null,
+    terminal: null,
     watch: null,
     branch: null,
     subagentsHeld: null,
@@ -425,6 +426,7 @@ function mergeView(current, data) {
         schedules: data.schedules ?? base.schedules,
         // No goal is null, which the server sends too: only a missing field keeps the last value.
         goal: data.goal === undefined ? base.goal : data.goal,
+        terminal: data.terminal === undefined ? base.terminal : data.terminal,
         // The session's PR watch, or null: the same.
         watch: data.watch === undefined ? base.watch : data.watch,
         // Why subagents' reports wait (a spend limit), or null when none do: the subagents bar says it.
@@ -502,6 +504,15 @@ const handlers = {
                       })
                 : undefined,
         ),
+    "terminal-editor": (data) =>
+        data.conversationId === store.state.conversationId &&
+        store.set((state) => ({
+            composerInsert: {
+                text: data.text,
+                replace: true,
+                n: (state.composerInsert?.n ?? 0) + 1,
+            },
+        })),
     auth: (data) => handleAuth(data),
     closing: () => store.set({ connection: "closed" }),
     reload: () => {
@@ -887,6 +898,49 @@ export const actions = {
             requestId: uid(),
             ...(inlineFiles ? { inlineFiles } : {}),
         }),
+    terminalCommand: async (name, args, requestId) => {
+        const id = current();
+        const journalKey = "pocket.terminal.requests";
+        const key = JSON.stringify([store.state.me?.id, id, name, args]);
+        const pending = JSON.parse(sessionStorage.getItem(journalKey) ?? "[]");
+        const saved = pending.find((item) => item.key === key);
+        const managed = requestId === undefined;
+
+        if (managed) {
+            requestId = saved?.id ?? uid();
+
+            if (!saved) {
+                if (pending.length >= 64) {
+                    throw new Error(
+                        "Too many unresolved extension commands in this tab. Retry an earlier command to resolve its result first.",
+                    );
+                }
+
+                pending.push({ key, id: requestId });
+                // Persist BEFORE dispatch. A reload or storage failure must not mint an unsafe retry.
+                sessionStorage.setItem(journalKey, JSON.stringify(pending));
+            }
+        }
+
+        const result = await api(`c/${id}/terminal/command`, { name, args, requestId });
+
+        if (managed) {
+            const latest = JSON.parse(sessionStorage.getItem(journalKey) ?? "[]");
+
+            sessionStorage.setItem(
+                journalKey,
+                JSON.stringify(latest.filter((item) => item.key !== key || item.id !== requestId)),
+            );
+        }
+
+        if (current() === id) {
+            store.set({ templates: null });
+        }
+
+        return result;
+    },
+    terminalAnswer: (conversationId, id, value) =>
+        api(`c/${conversationId}/terminal/dialog`, { id, value }),
     /** Run a command in the session's folder (`!`); `context: false` keeps it from Pi (`!!`). */
     shell: (command, context, requestId = uid()) =>
         api(`c/${current()}/shell`, { command, context, requestId }),
@@ -959,7 +1013,9 @@ export const actions = {
 
 /** Entries that show as transcript rows. Tool results show inside their call's card instead. */
 export const isRow = (entry) =>
-    ["user", "assistant", "compaction", "reset", "shell", "note", "fromPi"].includes(entry.kind);
+    ["user", "assistant", "compaction", "reset", "shell", "note", "fromPi", "extension"].includes(
+        entry.kind,
+    );
 
 /**
  * Show the transcript from this entry down when it is above the rows shown now, as for a jump to a pinned or quoted

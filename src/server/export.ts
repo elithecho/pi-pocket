@@ -170,6 +170,10 @@ export function transcriptMarkdown(input: ExportInput): string {
                     .filter((line) => line !== "")
                     .join("\n\n"),
             );
+        } else if (entry.kind === "extension") {
+            sections.push(
+                `**Pi extension** ${fence(entry.customType)}\n\n${fence(entry.text)}${entry.images > 0 ? `\n\n_${entry.images} image${entry.images === 1 ? "" : "s"} attached._` : ""}`,
+            );
         } else if (entry.kind === "note") {
             sections.push(`_${entry.name} ${entry.text}._`);
         } else if (entry.kind === "fromPi") {

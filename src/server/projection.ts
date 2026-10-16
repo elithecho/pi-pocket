@@ -68,6 +68,14 @@ export type ClientEntry =
     | { id: number; kind: "reset"; text?: string }
     | ({ id: number; kind: "shell"; truncated?: number } & ShellData)
     | { id: number; kind: "note"; text: string; name: string }
+    | {
+          id: number;
+          kind: "extension";
+          text: string;
+          customType: string;
+          images: number;
+          at?: number;
+      }
     | { id: number; kind: "fromPi"; title: string; file: string }
     | { id: number; kind: "other"; entryKind: string };
 
@@ -358,6 +366,24 @@ export function projectEntry(entry: EntryRecord, full = false): ClientEntry | un
         case "pi.system":
             return undefined;
 
+        case "pocket.terminal-message": {
+            const data = entry.data as
+                { custom?: { display?: boolean; customType?: string } } | undefined;
+
+            if (data?.custom?.display !== true) {
+                return undefined;
+            }
+
+            return {
+                id,
+                kind: "extension",
+                customType: data.custom.customType ?? "message",
+                text: textOfContent(message?.content),
+                images: countImages(message?.content),
+                ...madeAt(message),
+            };
+        }
+
         case FROM_PI_ENTRY: {
             const data = entry.data as Partial<FromPiData> | undefined;
 
@@ -618,6 +644,10 @@ export function entryText(entry: ClientEntry): string {
         return entry.text.split(ATTACHMENTS_HEADING)[0] ?? "";
     }
 
+    if (entry.kind === "extension") {
+        return entry.text;
+    }
+
     if (entry.kind === "assistant") {
         return plainText(
             entry.blocks.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("\n"),
@@ -738,6 +768,13 @@ export function peekLines(
                     kind: "shell",
                     command: entry.command.slice(0, PEEK_ARG),
                     status: entry.status === "done" && (entry.code ?? 0) === 0 ? "done" : "error",
+                });
+                break;
+            case "extension":
+                lines.push({
+                    kind: "note",
+                    name: `Pi extension · ${entry.customType}`,
+                    text: snippet(entry.text, PEEK_TEXT),
                 });
                 break;
             case "note":

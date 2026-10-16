@@ -637,3 +637,94 @@ export const RepoWatchesDoc = defineDoc<{ items: Record<string, RepoWatch> }>({
     scope: "session",
     initial: () => ({ items: {} }),
 });
+
+/** Only extension-owned SDK entries, not a second copy of Pocket's ordinary conversation history. */
+export type TerminalEntry = {
+    sdk: JsonValue;
+    /** The preceding Pocket/SDK history identity; null means before the first ordinary message. */
+    after: string | null;
+    /** A model-visible custom message is represented by this admitted input/write, exactly once. */
+    admission?: { conversation: number; requestId: string };
+};
+
+export type TerminalWidget = { lines: string[]; placement: "aboveEditor" | "belowEditor" };
+
+export type TerminalExtensionSelection =
+    | { mode: "all" }
+    | { mode: "only"; names: string[] }
+    | { mode: "modify"; add?: string[]; remove?: string[] };
+
+/** Extension state follows the Pocket branch; no pending autonomous work is copied by this document. */
+export const TerminalStateDoc = defineDoc<{
+    entries: TerminalEntry[];
+    activeTools?: string[];
+    baseTools?: { mode: "all" } | { mode: "only" | "remove"; names: string[] };
+    baseExtensions?: TerminalExtensionSelection;
+    baseExtensionsApplied?: string;
+    statuses: Record<string, string>;
+    widgets: Record<string, TerminalWidget>;
+}>({
+    kind: "pocket.terminal-state",
+    version: 1,
+    scope: "conversation",
+    history: "rewindable",
+    fork: "asOf",
+    initial: () => ({ entries: [], statuses: {}, widgets: {} }),
+});
+
+type TerminalOperationBase = { by: string; host: string; epoch: number };
+
+export type TerminalOperationRecord = TerminalOperationBase &
+    (
+        | { status: "started" }
+        | { status: "done"; result: JsonValue }
+        | { status: "interrupted"; error: string }
+    );
+
+type TerminalIntentBase = {
+    by: string;
+    epoch: number;
+    /** A stable key for Commands' attributed request id, unchanged across delivery retries. */
+    key: string;
+    content: JsonValue;
+    trigger: boolean;
+    delivery: "steer" | "followUp" | "nextTurn";
+    expand: boolean;
+    custom?: JsonValue;
+};
+
+export type TerminalIntent = TerminalIntentBase &
+    (
+        | { status: "pending" }
+        | { status: "blocked"; error: string }
+        | { status: "delivered"; submission: number }
+        | { status: "cancelled"; reason: string }
+    );
+
+export type TerminalWorkState = {
+    epoch: number;
+    acknowledged: Record<string, number>;
+    operations: Record<string, TerminalOperationRecord>;
+    outbox: Record<string, TerminalIntent>;
+};
+
+/** Requests/outbox are operational, not branch content: forks must never inherit queued autonomous work. */
+export const TerminalWorkDoc = defineDoc<TerminalWorkState>({
+    kind: "pocket.terminal-work",
+    version: 1,
+    scope: "conversation",
+    history: "latest",
+    fork: "initial",
+    initial: () => ({ epoch: 0, acknowledged: {}, operations: {}, outbox: {} }),
+});
+
+/** Cold receipts preserve old results/unsafe-retry prevention without retaining every result in the hot work index. */
+export const TerminalReceiptDoc = defineDocFamily<{ operation?: TerminalOperationRecord }, null>({
+    kind: "pocket.terminal-receipt",
+    version: 1,
+    family: true,
+    scope: "conversation",
+    history: "latest",
+    fork: "initial",
+    initial: () => ({}),
+});

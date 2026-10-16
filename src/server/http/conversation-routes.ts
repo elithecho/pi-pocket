@@ -6,6 +6,8 @@ import { pipeline } from "node:stream/promises";
 import type { ConversationId } from "@earendil-works/pi-durable";
 import type { Attachment, SubmitRequest } from "../commands.ts";
 import { HttpError } from "../errors.ts";
+import { terminalPromptTemplates } from "../prompts.ts";
+import { POCKET_COMMAND_NAMES } from "../terminal/commands.ts";
 import { serveImage, TYPES } from "./assets.ts";
 import { type ApiRequest, json, readJson, send } from "./io.ts";
 
@@ -390,9 +392,50 @@ export async function conversationRoutes(
         });
     }
 
-    // Prompt templates and skills, for the message box's slash commands.
+    if (third === "terminal" && fourth === "command" && method === "POST") {
+        const body = await readJson<{ name?: unknown; args?: unknown; requestId?: unknown }>(
+            request,
+        );
+
+        if (
+            typeof body.name !== "string" ||
+            body.name.length === 0 ||
+            body.name.length > 512 ||
+            /\s/.test(body.name) ||
+            typeof body.args !== "string" ||
+            typeof body.requestId !== "string" ||
+            body.requestId.length === 0 ||
+            body.requestId.length > 512
+        ) {
+            throw new HttpError(
+                400,
+                "name, args and a stable requestId are required for an extension command",
+            );
+        }
+
+        return json(response, 200, {
+            result: await app.terminal.command(id, user, body.name, body.args, body.requestId),
+        });
+    }
+
+    if (third === "terminal" && fourth === "dialog" && method === "POST") {
+        const body = await readJson<{ id?: unknown; value?: unknown }>(request);
+
+        if (typeof body.id !== "string") {
+            throw new HttpError(400, "An extension dialog id is required");
+        }
+
+        await app.terminal.answer(id, user, body.id, body.value);
+
+        return json(response, 200, { ok: true });
+    }
+
+    // Prompt templates, skills and registered extension commands, for the message box's slash menu.
     if (third === "prompts" && method === "GET") {
-        const templates = app.promptTemplates(id).map(({ name, description, argumentHint }) => ({
+        const originals = app.promptTemplates(id);
+        const templates = (
+            app.terminal.enabled ? terminalPromptTemplates(originals) : originals
+        ).map(({ name, description, argumentHint }) => ({
             name,
             description,
             ...(argumentHint === undefined ? {} : { argumentHint }),
@@ -404,7 +447,30 @@ export async function conversationRoutes(
             skill: true,
         }));
 
-        return json(response, 200, [...templates, ...skills]);
+        const commands = await app.terminal.catalogue(id, user);
+        const plugin = commands.flatMap((command) => {
+            const origin = basename(command.source).startsWith("index.")
+                ? basename(join(command.source, ".."))
+                : basename(command.source);
+            const entry = {
+                description: command.description,
+                argumentHint: "[arguments]",
+                extension: command.name,
+                origin,
+            };
+            const alias = { ...entry, name: `ext:${command.name}`, alias: true };
+            const collision =
+                POCKET_COMMAND_NAMES.has(command.name.toLowerCase()) ||
+                command.name.startsWith("skill:") ||
+                command.name.startsWith("ext:") ||
+                command.name.startsWith("template:") ||
+                command.name.includes("/") ||
+                templates.some((template) => template.name === command.name);
+
+            return collision ? [alias] : [{ ...entry, name: command.name }, alias];
+        });
+
+        return json(response, 200, [...templates, ...skills, ...plugin]);
     }
 
     if (third === "view" && method === "GET") {

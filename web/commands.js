@@ -5,7 +5,7 @@ import { branchAvailable } from "./sheets/branch.js";
 import { memoryAvailable, remember } from "./sheets/memory.js";
 import { togglePeeks } from "./peeks.js";
 import { askPip, openPip, pipAvailable } from "./pip.js";
-import { actions, collab, navigate, notify, openSheet, scoped, store } from "./store.js";
+import { actions, collab, navigate, notify, openSheet, scoped, store, uid } from "./store.js";
 import { chooseTheme, THEMES } from "./theme.js";
 import { trustAvailable } from "./trust.js";
 import { copyText, formatTokens, formatWhen, modelLabel, replyText, shortPath } from "./ui.js";
@@ -40,50 +40,102 @@ export async function watchPr(pr) {
 /** How long a list of prompt templates is used before it is fetched again: someone may be writing one. */
 const TEMPLATES_FOR_MS = 30_000;
 
+const templateRevision = () => {
+    const server = store.state.server;
+
+    return `${server?.startedAt}:${server?.extensionRevision}:${server?.extensions?.includes("pocket-terminal")}`;
+};
+
+/** Only a catalogue for the current conversation, folder and extension generation may be used. */
+export function currentTemplates() {
+    const cached = store.state.templates;
+
+    return cached?.conversationId === store.state.conversationId &&
+        cached?.cwd === store.state.view.agent?.cwd &&
+        cached?.revision === templateRevision()
+        ? cached
+        : null;
+}
+
 /**
  * Fetch Pi's prompt templates for this conversation, unless a fresh list is here. Call when someone types a command. A
  * list is for a folder too: the session moved (`/cwd`, a worktree) has another project's templates and skills.
  */
-export function loadTemplates() {
+export function loadTemplates(force = false) {
     const id = store.state.conversationId;
     const cwd = store.state.view.agent?.cwd;
     const cached = store.state.templates;
-    const same = cached?.conversationId === id && cached?.cwd === cwd;
+    const revision = templateRevision();
+    const same =
+        cached?.conversationId === id && cached?.cwd === cwd && cached?.revision === revision;
 
-    if (id === null || (same && Date.now() - cached.at < TEMPLATES_FOR_MS)) {
+    if (id === null || (!force && same && Date.now() - cached.at < TEMPLATES_FOR_MS)) {
         return;
     }
 
+    const requestId = uid();
+    const isCurrent = () => currentTemplates()?.requestId === requestId;
+
     store.set({
-        templates: { conversationId: id, cwd, at: Date.now(), list: same ? cached.list : [] },
+        templates: {
+            requestId,
+            conversationId: id,
+            cwd,
+            revision,
+            at: Date.now(),
+            list: same ? cached.list : [],
+            loading: true,
+            error: null,
+        },
     });
     actions.prompts().then(
         (list) =>
-            store.state.templates?.conversationId === id &&
-            store.state.templates?.cwd === cwd &&
-            store.set({ templates: { ...store.state.templates, list } }),
-        () => {},
+            isCurrent() &&
+            store.set({
+                templates: { ...store.state.templates, list, loading: false, error: null },
+            }),
+        (error) =>
+            isCurrent() &&
+            store.set({
+                templates: {
+                    ...store.state.templates,
+                    loading: false,
+                    error: error.message ?? "Could not load slash commands",
+                },
+            }),
     );
 }
 
 /** The prompt templates and skills (`skill:name`) known for this conversation, as entries like the app's commands. */
 function templates() {
-    const cached = store.state.templates;
+    const cached = currentTemplates();
 
-    if (
-        cached?.conversationId !== store.state.conversationId ||
-        cached.cwd !== store.state.view.agent?.cwd
-    ) {
+    if (!cached) {
         return [];
     }
 
-    return cached.list.map((template) => ({
-        name: template.name,
-        args: template.argumentHint ?? "",
-        description: template.description,
-        template: true,
-        skill: template.skill === true,
-    }));
+    return cached.list.map((template) => {
+        const extension = typeof template.extension === "string";
+
+        return {
+            name: template.name,
+            args: template.argumentHint ?? "",
+            description: extension
+                ? `${template.description} · Pi extension${template.origin ? ` · ${template.origin}` : ""}`
+                : template.description,
+            template: !extension,
+            extension,
+            alias: template.alias === true,
+            actualName: extension ? template.extension : template.name,
+            skill: template.skill === true,
+            ...(extension
+                ? {
+                      run: (arg, requestId) =>
+                          actions.terminalCommand(template.extension, arg, requestId),
+                  }
+                : {}),
+        };
+    });
 }
 
 /** A path as the conversation means it: absolute, `~/…`, or relative to its working directory. */
@@ -462,13 +514,17 @@ const available = () => COMMANDS.filter((command) => command.available?.() ?? tr
 export function parseCommand(text) {
     const match = /^\/([a-z][\w-]*)(?:\s+([\s\S]*))?$/i.exec(text.trim());
 
-    if (!match) {
-        return null;
+    const command = match && available().find((each) => each.name === match[1].toLowerCase());
+
+    if (command) {
+        return { command, arg: (match[2] ?? "").trim() };
     }
 
-    const command = available().find((each) => each.name === match[1].toLowerCase());
+    const remote = /^\/([^\s]+)(?:\s([\s\S]*))?$/.exec(text.trimStart());
+    const extension =
+        remote && templates().find((each) => each.extension && each.name === remote[1]);
 
-    return command ? { command, arg: (match[2] ?? "").trim() } : null;
+    return extension ? { command: extension, arg: remote[2] ?? "" } : null;
 }
 
 /** The prompt template a message to Pi starts with, or null. The app's own commands come first. */
@@ -484,7 +540,7 @@ export function parseTemplate(text) {
 
 /** Commands to offer while someone types a command name: "/" lists them all, then Pi's prompt templates and skills. */
 export function suggestCommands(text) {
-    const match = /^\/([\w:-]*)$/.exec(text);
+    const match = /^\/([^\s]*)$/.exec(text);
 
     if (!match) {
         return [];
@@ -492,17 +548,31 @@ export function suggestCommands(text) {
 
     const prefix = match[1].toLowerCase();
     const own = available();
+    const remote = templates();
     const commands = [
         ...own,
-        ...templates().filter((template) => !own.some((command) => command.name === template.name)),
+        ...remote.filter(
+            (template) =>
+                !own.some((command) => command.name === template.name) &&
+                (!template.alias ||
+                    prefix.startsWith("ext:") ||
+                    !remote.some(
+                        (other) =>
+                            other.extension &&
+                            !other.alias &&
+                            other.actualName === template.actualName,
+                    )),
+        ),
     ];
-    const starts = commands.filter((each) => each.name.startsWith(prefix));
+    const starts = commands.filter((each) => each.name.toLowerCase().startsWith(prefix));
     // Two letters or more also find names that contain them: "/py" finds /copy.
     const contains =
         prefix.length < 2
             ? []
             : commands.filter(
-                  (each) => !each.name.startsWith(prefix) && each.name.includes(prefix),
+                  (each) =>
+                      !each.name.toLowerCase().startsWith(prefix) &&
+                      each.name.toLowerCase().includes(prefix),
               );
 
     return [...starts, ...contains];

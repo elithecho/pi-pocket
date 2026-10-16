@@ -142,7 +142,21 @@ export class Schedules {
                 : schedule.requestedBy !== undefined
                   ? requestFor(schedule.requestedBy, `schedule-${sending}`)
                   : `schedule:${sending}`;
-        const stopped = this.#stopped(conversationId, schedule);
+        let stopped = this.#stopped(conversationId, schedule);
+
+        if (stopped === undefined) {
+            const requester = schedule.by ?? schedule.requestedBy;
+
+            // Durable prepares tools before beforeRequest. Idle sessions may have no process after
+            // restart, so restore the per-conversation registry before admitting scheduled input.
+            await this.#app.terminal.prepare(
+                conversationId,
+                requester === undefined ? undefined : this.#app.config.userById(requester),
+                context,
+            );
+            // Startup can wait for plugin UI; do not use stale authority/spend after that wait.
+            stopped = this.#stopped(conversationId, schedule);
+        }
 
         if (stopped === undefined) {
             await conversation.submit(

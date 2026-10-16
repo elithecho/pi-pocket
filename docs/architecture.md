@@ -44,6 +44,39 @@ Extensions never see `PocketApp`. They get `PocketHost` (`host.ts`), whose funct
 
 `FolderFavoritesDoc` (`pocket.folder-favorites`) stores each person's ordered favorite working folders in SQLite. `folder-favorites.ts` reads and changes only the signed-in person's list; explicit star/unstar operations run inside one harness transaction, so concurrent devices do not overwrite unrelated changes. The commit coordinator sends each connected client only its person's list as a `folder-favorites` event. `hello.folderFavorites` supplies the initial list and refreshes it on reconnect. The folder picker renders committed server state; a failed save leaves its list unchanged. Hide/Browse remains in browser storage. Earlier browser-local favorite lists are not read or imported.
 
+## Terminal extension hosts
+
+The off-by-default Terminal extensions module connects configured Pi plugins to Pocket through
+`terminal/manager.ts`. Each conversation has a separate child process with an SDK runner, not a model
+loop or persistent SDK session. The process isolates module state, not OS authority. Trust and
+configuration filters apply before plugin import; Pocket still checks access/driver/spend at dispatch
+and message admission. Per-conversation tool extensions are excluded from global defaults and PiP.
+Terminal hooks resolve before native hooks even when the module is enabled after startup or an
+explicit conversation selection has another order: native plan/guard must inspect plugin-mutated
+arguments, not their original values. The relative order of all non-terminal selections stays intact.
+Exact/removal selections retain the bridge while enabled; disabling removes its overlay without
+undoing native selection edits made since host startup.
+
+The SDK view projects ordinary Pocket history; only extension-owned custom metadata lives in
+`pocket.terminal-state` (rewindable/asOf). Latest/initial `pocket.terminal-work` holds operational
+records/outbox intents, and cold per-key `pocket.terminal-receipt` documents preserve settled results.
+Forks inherit state at the branch point, not autonomous work. Concurrent commands/tools share one
+in-host SDK view and one sequenced effect log. Pocket atomically commits an ordered prefix with
+operation result markers and message intents, then acknowledges that prefix. A pending operation can
+have checkpointed effects without being considered successful. Uncertain handlers are interrupted,
+never replayed; committed messages recover through normal idempotent admission. Admitted custom
+messages fence later SDK ledger entries, preserving append/message/append order after refresh; pending
+worker effects follow the committed ledger tail without duplicating native model contributions.
+
+Startup restores active/outbox hosts before harness resume. Idle hosts rehydrate before normal or
+scheduled input admission, before Durable prepares that request's tools. Preparation follows the
+Durable caller's cancellation, and shutdown starts child disposal before waiting on Durable hooks.
+Explicit reload/restart uses a `reload` session-start reason; idle rehydration uses `resume`.
+Browser views contain portable statuses/widgets
+and only the current person's pending dialogs, not the stored SDK ledger. See
+[terminal-extensions.md](terminal-extensions.md) for the supported compatibility boundary and the
+acceptance/verification record.
+
 ## PiP's conversation
 
 PiP (`pip.ts`) is a conversation with a `pip` mark in its session entry, which `sessions()` leaves out of every list. The harness settings select every installed extension but PiP's (`pocket-pip`) by default; PiP's conversation stores its own selection (`PIP_EXTENSIONS`, without bash, write, or edit), which `ensure` sets again each time it opens, so PiP's tools reach no other conversation. Its tools act through `Commands` and `Schedules` as PiP's person, with that person's checks, so `canSee` keeps every PiP from everyone but its person: anyone who could write to it would act as them. Its messages to sessions are once per tool call (a request id hashed from the call's key), and each follow leaves a mark in its list (`FollowsDoc`) when it reports or is stopped, so a replayed call neither sends nor follows twice. A tab's PiP panel is a second client in PiP's room (`setPip`), whose `view` events reach the tab as `pipview`; `watching` counts it, so PiP's answers push nothing while it shows.
@@ -87,7 +120,8 @@ Lessons Pi keeps across sessions are one document for the whole app, `MemoryDoc`
 5. Load spend.
 6. Subscribe to commits, approvals, and browser pages.
 7. Warm Lancet Guard.
-8. Resume the work the last process left unfinished.
+8. Restore Terminal extensions' interrupted operation records and dynamic tool registry, if enabled.
+9. Resume the work the last process left unfinished.
 
 Work resumes last, so that everything that follows commits is listening before the first one comes.
 

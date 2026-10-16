@@ -67,6 +67,27 @@ function isFile(path: string): boolean {
     }
 }
 
+/** Escape templates in the reserved plugin namespace without colliding with another real template. */
+export function terminalPromptTemplates(templates: readonly PromptTemplate[]): PromptTemplate[] {
+    const occupied = new Set(templates.map((template) => template.name));
+
+    return templates.map((template) => {
+        if (!template.name.startsWith("ext:")) {
+            return template;
+        }
+
+        let name = `template:${template.name}`;
+
+        while (occupied.has(name)) {
+            name = `template:${name}`;
+        }
+
+        occupied.add(name);
+
+        return { ...template, name };
+    });
+}
+
 /** The `.md` files of a folder, not its subfolders; a missing or unreadable folder has none. */
 function templatesIn(directory: string): PromptTemplate[] {
     let names: string[];
@@ -215,7 +236,9 @@ export function expandPromptTemplate(
         return undefined;
     }
 
-    const template = templates.find((each) => each.name === match[1]);
+    const template = [...templates, ...terminalPromptTemplates(templates)].find(
+        (each) => each.name === match[1],
+    );
 
     return template === undefined
         ? undefined
