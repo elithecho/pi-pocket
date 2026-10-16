@@ -117,10 +117,23 @@ function LineInput({ value, placeholder, label, onSubmit, onCancel, class: class
 }
 
 export function CwdSheet({ mode }) {
-    const { view, server, folderFavorites: favorites } = store.state;
+    const { view, server, folderFavorites: favorites, folderFavoritesReady } = store.state;
     const changing = mode === "change";
-    const initial =
-        (changing ? (view.agent?.cwd ?? server?.defaultCwd) : server?.defaultCwd) ?? "~";
+    const [browsing, setBrowsing] = useState(changing ? true : null);
+    const favoriteList = useRef(null);
+
+    useEffect(() => {
+        if (folderFavoritesReady && (browsing === null || favorites.length === 0)) {
+            setBrowsing(browsing === true || favorites.length === 0);
+        }
+    }, [folderFavoritesReady, favorites, browsing]);
+
+    useEffect(() => {
+        if (!browsing && folderFavoritesReady) {
+            favoriteList.current?.querySelector("button")?.focus({ preventScroll: true });
+        }
+    }, [browsing, folderFavoritesReady]);
+    const initial = changing ? (view.agent?.cwd ?? server?.defaultCwd ?? "~") : "~";
     const [listing, setListing] = useState(null);
     const [failed, setFailed] = useState(null);
     // The folder a click selected (mouse only): Open takes it over the one you are in.
@@ -182,8 +195,10 @@ export function CwdSheet({ mode }) {
     };
 
     useEffect(() => {
-        load(initial);
-    }, []);
+        if (browsing) {
+            load(initial);
+        }
+    }, [browsing]);
 
     // A new folder shows from its top, or with the selected one in view; its path shows to its end. Keys go to the
     // list, with a mouse and keyboard.
@@ -406,6 +421,68 @@ export function CwdSheet({ mode }) {
         <span>${name}</span>
         ${key && html`<span class="fp-key">${key}</span>`}
     </button>`;
+
+    if (!browsing) {
+        return html`<${Sheet} title="New session" onClose=${closeSheet}>
+            ${
+                !folderFavoritesReady
+                    ? html`<p class="muted" role="status">Loading favorites…</p>`
+                    : html`<p class="muted">Launch a favorite</p>
+                          <div class="favorite-launch-list" ref=${favoriteList} aria-label="Favorites">
+                              ${favorites.map(
+                                  (path, index) => html`<button
+                                  key=${path}
+                                  type="button"
+                                  class="favorite-launch"
+                                  title=${shortPath(path, home)}
+                                  disabled=${busy}
+                                  onClick=${() => use(path)}
+                              >
+                                  <${Icon} name="star" size=${18} />
+                                  <span class="favorite-launch-label">
+                                      <strong>${favoriteLabels[index]}</strong>
+                                      <span class="muted mono">${shortPath(path, home)}</span>
+                                  </span>
+                                  ${
+                                      index < 9 &&
+                                      html`<span class="fp-key">
+                                      ${APPLE ? "⌘" : "Ctrl+"}${index + 1}
+                                  </span>`
+                                  }
+                              </button>`,
+                              )}
+                          </div>`
+            }
+            <button
+                type="button"
+                class="button"
+                disabled=${busy}
+                onClick=${() => setBrowsing(true)}
+            >
+                Choose another folder…
+            </button>
+            <label class="check">
+                <input
+                    type="checkbox"
+                    checked=${worktree}
+                    disabled=${busy}
+                    onChange=${(event) => setWorktree(event.currentTarget.checked)}
+                />
+                Own git worktree
+            </label>
+            ${
+                piSessionsAvailable() &&
+                html`<button
+                type="button"
+                class="link small"
+                disabled=${busy}
+                onClick=${() => openSheet({ type: "pi-sessions" })}
+            >
+                Continue a Pi session…
+            </button>`
+            }
+        <//>`;
+    }
 
     return html`<${Sheet}
         title=${changing ? "Move this session: pick a folder" : "New session: pick a folder"}

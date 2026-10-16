@@ -95,7 +95,7 @@ function fuzzy(text, query) {
 
 /** The actions that make sense here, as launcher items. */
 function actionItems() {
-    const { view, conversationId, me } = store.state;
+    const { view, conversationId, me, folderFavorites, server } = store.state;
     const conversation = conversationId !== null ? view.conversation : null;
     const session = conversation?.kind === "session";
     const steer = canSteer();
@@ -108,6 +108,20 @@ function actionItems() {
             keys: "Alt N",
             run: () => openSheet({ type: "cwd", mode: "new" }),
         },
+        ...(canStart
+            ? folderFavorites.map((path) => ({
+                  key: `action:new-favorite:${path}`,
+                  label: `New Session: ${path === server?.home ? "~" : path.replace(/\/+$/, "").split("/").pop() || "/"}`,
+                  detail: shortPath(path, server?.home),
+                  icon: "star",
+                  run: () =>
+                      attempt(async () => {
+                          const created = await actions.createSession(path);
+
+                          navigate(created.id);
+                      }),
+              }))
+            : []),
         piSessionsAvailable() && {
             label: "Continue a Pi session",
             detail: "from Pi in the terminal",

@@ -5947,6 +5947,42 @@ pre.diff .del {
  * The folder picker, laid out as a desktop's file dialog: the path and New folder on top, places beside the folders,
  * and the folder Open takes with Cancel and Open at the bottom. A fixed height: only the places and the folders scroll.
  */
+.favorite-launch-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.favorite-launch {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    min-height: 64px;
+    padding: 12px;
+    text-align: left;
+    background: var(--card);
+    border-radius: 10px;
+}
+
+.favorite-launch-label {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+}
+
+.favorite-launch-label > * {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.favorite-launch-label .mono {
+    font-size: 0.8rem;
+}
+
 .sheet.folder-sheet {
     height: min(86dvh, 600px);
 }

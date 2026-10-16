@@ -42,7 +42,7 @@ Extensions never see `PocketApp`. They get `PocketHost` (`host.ts`), whose funct
 
 ## Favorite folders
 
-`FolderFavoritesDoc` (`pocket.folder-favorites`) stores each person's ordered favorite working folders in SQLite. `folder-favorites.ts` reads and changes only the signed-in person's list; explicit star/unstar operations run inside one harness transaction, so concurrent devices do not overwrite unrelated changes. The commit coordinator sends each connected client only its person's list as a `folder-favorites` event. `hello.folderFavorites` supplies the initial list and refreshes it on reconnect. The folder picker shows only what the server committed, so a failed save leaves its list as it was.
+`FolderFavoritesDoc` (`pocket.folder-favorites`) stores each person's ordered favorite working folders in SQLite. `folder-favorites.ts` reads and changes only the signed-in person's list; explicit star/unstar operations run inside one harness transaction, so concurrent devices do not overwrite unrelated changes. The commit coordinator sends each connected client only its person's list as a `folder-favorites` event. `hello.folderFavorites` supplies the initial list and refreshes it on reconnect. The folder picker shows only what the server committed, so a failed save leaves its list as it was. New session first shows favorite launch buttons, falling back to the full folder browser when the known list is empty or the person chooses to browse. `folderFavoritesReady` in the web store distinguishes the initial unloaded list from a known empty one; explicit browsing stays put across live favorite updates.
 
 ## PiP's conversation
 
