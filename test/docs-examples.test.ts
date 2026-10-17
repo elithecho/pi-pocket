@@ -52,6 +52,10 @@ const route: FauxResponseStep = (context) => {
         return call("bash", { command: "git push --force origin main" });
     }
 
+    if (text.includes("count the words")) {
+        return call("my_word_count", { text: "one two  three" });
+    }
+
     if (text.includes("plain push")) {
         return call("bash", { command: "echo git push origin main" });
     }
@@ -93,12 +97,13 @@ test("the example extensions load as drop-ins, off until the owner turns them on
         listed.map((module) => [module.file, module.enabled]),
         [
             ["clock.ts", false],
+            ["my-words.ts", false],
             ["no-force-push.ts", false],
             ["server-status.ts", false],
         ],
     );
 
-    for (const file of ["clock.ts", "no-force-push.ts", "server-status.ts"]) {
+    for (const file of ["clock.ts", "my-words.ts", "no-force-push.ts", "server-status.ts"]) {
         await app.setExtensionEnabled(owner(app), file, true);
     }
 
@@ -107,6 +112,10 @@ test("the example extensions load as drop-ins, off until the owner turns them on
     await say(app, id, "what time is it in UTC?");
     assert.match(await answer(id), /tool said: .*\d{4}.*\(UTC\)/);
     assert.match(prompt, /Do not force-push with git/);
+
+    // The tutorial's module (docs/extensions/first-extension.md).
+    await say(app, id, "count the words");
+    assert.match(await answer(id), /tool said: 3 words/);
 
     await say(app, id, "force push it");
     assert.match(await answer(id), /Force-pushing is turned off here/);

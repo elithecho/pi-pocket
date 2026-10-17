@@ -102,7 +102,7 @@ async function close(): Promise<void> {
     await see(`document.querySelector('.pip-panel') === null`, "PiP closed");
 }
 
-async function fresh(viewport: Viewport = VIEWPORTS.desktop, home = false): Promise<void> {
+async function fresh(viewport: Viewport = VIEWPORTS.desktop): Promise<void> {
     if (
         await inPage<boolean>(
             `return JSON.stringify(document.querySelector(${JSON.stringify(BOX)}) !== null)`,
@@ -122,13 +122,8 @@ async function fresh(viewport: Viewport = VIEWPORTS.desktop, home = false): Prom
     await settle();
     await page.setViewport(viewport);
     // Reload after a touch/desktop change so the composer reads the right media queries.
-    await page.navigate(`${base}/${home ? "" : `s/${background}`}`);
-    await see(
-        home
-            ? `document.querySelector('.home-list') !== null`
-            : `document.querySelector('.composer textarea') !== null`,
-        "the background screen",
-    );
+    await page.navigate(`${base}/s/${background}`);
+    await see(`document.querySelector('.composer textarea') !== null`, "the background screen");
     await settle();
     await page.evaluate(`
         window.pipTestFetch = window.fetch;
@@ -287,74 +282,66 @@ after(async () => {
     }
 });
 
-for (const [device, viewport] of [["desktop", VIEWPORTS.desktop]] as const) {
-    test(
-        `${device}: image-only and file-only messages to PiP, not the background project`,
-        real,
-        async () => {
-            await fresh(viewport);
-            const backgroundBefore = await app.transcripts.allEntries(background, true);
+test("image-only and file-only messages to PiP, not the background project", real, async () => {
+    await fresh(VIEWPORTS.desktop);
+    const backgroundBefore = await app.transcripts.allEntries(background, true);
 
-            for (const method of ["picker"] as const) {
-                const image = `${device}-${method}.png`;
-                const document = `${device}-${method}.txt`;
-                const before = requests.length;
+    const image = "picker.png";
+    const document = "picker.txt";
+    const before = requests.length;
 
-                await attach(method, [{ name: image, image: true }, { name: document }]);
-                await uploaded(2);
-                assert.deepEqual(await names(), [image, document]);
-                await tap(`[aria-label="Remove ${document}"]`);
-                assert.deepEqual(await names(), [image], "remove one leaves the other");
-                await tap(".pip-send");
-                await until(() => requests.length > before, "the vision model saw the send");
-                await idle();
-                const sent = (await submissions()).at(-1)!;
+    await attach("picker", [{ name: image, image: true }, { name: document }]);
+    await uploaded(2);
+    assert.deepEqual(await names(), [image, document]);
+    await tap(`[aria-label="Remove ${document}"]`);
+    assert.deepEqual(await names(), [image], "remove one leaves the other");
+    await tap(".pip-send");
+    await until(() => requests.length > before, "the vision model saw the send");
+    await idle();
+    const sent = (await submissions()).at(-1)!;
 
-                assert.equal(sent.url, `/api/c/${pip}/submit`);
-                assert.equal(sent.body?.text, "");
-                assert.deepEqual(
-                    sent.body?.attachments?.map((file) => file.name),
-                    [image],
-                );
-                assert.equal(
-                    requests.at(-1)?.images.length,
-                    1,
-                    "the real model request contains the image, not only its path",
-                );
-                assert.equal(requests.at(-1)?.images[0]?.mimeType, "image/png");
-                assert.equal(
-                    requests.at(-1)?.images[0]?.data,
-                    PNG,
-                    "the fixture's actual image bytes reached the model",
-                );
-                assert.deepEqual(await names(), []);
-                await attach(method, [{ name: document }]);
-                await uploaded(1);
-                await tap(".pip-send");
-                await until(async () => (await names()).length === 0, "file-only message sent");
-                await idle();
-                const file = (await submissions()).at(-1)?.body?.attachments?.[0];
-
-                assert.equal(file?.name, document);
-                assert.equal(file?.mime, "text/plain");
-                assert.equal(file?.size, Buffer.byteLength("fixture document"));
-                assert.equal(readFileSync(file!.path, "utf8"), "fixture document");
-            }
-
-            assert.deepEqual(
-                await app.transcripts.allEntries(background, true),
-                backgroundBefore,
-                "PiP never messages the background conversation",
-            );
-            assert.ok(
-                (await calls())
-                    .filter((call) => call.url.includes("/upload?"))
-                    .every((call) => call.url.startsWith(`/api/c/${pip}/upload?`)),
-            );
-            await close();
-        },
+    assert.equal(sent.url, `/api/c/${pip}/submit`);
+    assert.equal(sent.body?.text, "");
+    assert.deepEqual(
+        sent.body?.attachments?.map((file) => file.name),
+        [image],
     );
-}
+    assert.equal(
+        requests.at(-1)?.images.length,
+        1,
+        "the real model request contains the image, not only its path",
+    );
+    assert.equal(requests.at(-1)?.images[0]?.mimeType, "image/png");
+    assert.equal(
+        requests.at(-1)?.images[0]?.data,
+        PNG,
+        "the fixture's actual image bytes reached the model",
+    );
+    assert.deepEqual(await names(), []);
+    await attach("picker", [{ name: document }]);
+    await uploaded(1);
+    await tap(".pip-send");
+    await until(async () => (await names()).length === 0, "file-only message sent");
+    await idle();
+    const file = (await submissions()).at(-1)?.body?.attachments?.[0];
+
+    assert.equal(file?.name, document);
+    assert.equal(file?.mime, "text/plain");
+    assert.equal(file?.size, Buffer.byteLength("fixture document"));
+    assert.equal(readFileSync(file!.path, "utf8"), "fixture document");
+
+    assert.deepEqual(
+        await app.transcripts.allEntries(background, true),
+        backgroundBefore,
+        "PiP never messages the background conversation",
+    );
+    assert.ok(
+        (await calls())
+            .filter((call) => call.url.includes("/upload?"))
+            .every((call) => call.url.startsWith(`/api/c/${pip}/upload?`)),
+    );
+    await close();
+});
 
 test(
     "failed POST retains recoverable text and files; a pending send cannot duplicate and preserves newer typing",
@@ -426,51 +413,42 @@ test(
     },
 );
 
-for (const [device, viewport] of [["desktop", VIEWPORTS.desktop]] as const) {
-    test(
-        `${device}: a typed PiP text draft survives reload while open and while closed`,
-        real,
-        async () => {
-            await fresh(viewport);
-            const draft = "Keep this PiP draft across reload.\nSecond line, not a sent message.";
+test("a typed PiP text draft survives reload while open and while closed", real, async () => {
+    await fresh(VIEWPORTS.desktop);
+    const draft = "Keep this PiP draft across reload.\nSecond line, not a sent message.";
 
-            await tap(BOX);
-            await page.type({ selector: BOX }, draft);
-            await until(
-                async () => (await value()) === draft,
-                "native typing saved the text draft",
-            );
-            await page.navigate(`${base}/s/${background}`);
-            await see(
-                `(await import('/store.js')).store.state.me?.role === 'owner' && document.querySelector(${JSON.stringify(BOX)}) !== null && (await import('/store.js')).store.state.pipView.conversation?.id === ${Number(pip)}`,
-                "PiP restored after reload and sign-in state loaded",
-            );
-            await settle();
-            assert.equal(
-                await value(),
-                draft,
-                "initial unknown authentication cannot erase the saved text draft",
-            );
-            await close();
-            await page.navigate(`${base}/s/${background}`);
-            await see(
-                `(await import('/store.js')).store.state.me?.role === 'owner' && document.querySelector('.composer textarea') !== null`,
-                "background screen reloaded while PiP closed",
-            );
-            await settle();
-            assert.equal(
-                await inPage<boolean>(
-                    `return JSON.stringify(document.querySelector('.pip-panel') === null)`,
-                ),
-                true,
-            );
-            await open();
-            assert.equal(
-                await value(),
-                draft,
-                "a closed-panel reload keeps the saved text until the owner reopens PiP",
-            );
-            await close();
-        },
+    await tap(BOX);
+    await page.type({ selector: BOX }, draft);
+    await until(async () => (await value()) === draft, "native typing saved the text draft");
+    await page.navigate(`${base}/s/${background}`);
+    await see(
+        `(await import('/store.js')).store.state.me?.role === 'owner' && document.querySelector(${JSON.stringify(BOX)}) !== null && (await import('/store.js')).store.state.pipView.conversation?.id === ${Number(pip)}`,
+        "PiP restored after reload and sign-in state loaded",
     );
-}
+    await settle();
+    assert.equal(
+        await value(),
+        draft,
+        "initial unknown authentication cannot erase the saved text draft",
+    );
+    await close();
+    await page.navigate(`${base}/s/${background}`);
+    await see(
+        `(await import('/store.js')).store.state.me?.role === 'owner' && document.querySelector('.composer textarea') !== null`,
+        "background screen reloaded while PiP closed",
+    );
+    await settle();
+    assert.equal(
+        await inPage<boolean>(
+            `return JSON.stringify(document.querySelector('.pip-panel') === null)`,
+        ),
+        true,
+    );
+    await open();
+    assert.equal(
+        await value(),
+        draft,
+        "a closed-panel reload keeps the saved text until the owner reopens PiP",
+    );
+    await close();
+});

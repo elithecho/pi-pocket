@@ -14,6 +14,7 @@ import { hookRoute } from "./http/hook-routes.ts";
 import { serveApp, serveFile, VENDOR, WEB } from "./http/assets.ts";
 import { type HttpOptions, json } from "./http/io.ts";
 import { join as joinPage, login, sharePage } from "./http/sign-in.ts";
+import { themeFile } from "./http/theme-routes.ts";
 
 export function createHandler(options: HttpOptions) {
     const { app } = options;
@@ -58,6 +59,11 @@ export function createHandler(options: HttpOptions) {
             // An extension module's browser module, for the people it is for (`extension-web.ts`).
             if (parts[0] === "x" && parts[1] !== undefined) {
                 return extensionFile(app, request, response, parts.slice(1), auth.user(request));
+            }
+
+            // A theme's files, for everyone signed in (`themes.ts`): not the folders under web/themes/ as they are.
+            if (parts[0] === "themes") {
+                return themeFile(app, request, response, parts.slice(1), auth.user(request));
             }
 
             if (parts[0] === "vendor" && parts[1] !== undefined && VENDOR[parts[1]] !== undefined) {

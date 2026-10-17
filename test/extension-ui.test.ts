@@ -21,6 +21,7 @@ import { findBrowser } from "../src/server/browser/discovery.ts";
 import type { BrowserPage } from "../src/server/browser/page.ts";
 import type { ExtensionWeb } from "../src/server/host.ts";
 import { createHandler } from "../src/server/http.ts";
+import type { Pocket } from "../types/pocket.d.ts";
 
 const chromium = findBrowser();
 const real = {
@@ -29,6 +30,45 @@ const real = {
 const DESKTOP = { width: 1440, height: 900, scale: 1, mobile: false };
 const dropIns = join(root, "data", "extensions");
 const seen = globalThis as unknown as { meterWeb?: ExtensionWeb };
+
+/** `Pocket`'s members in the public types: `npm run check` holds this to them, and the first test holds `pocket` to it. */
+const POCKET_MEMBERS: Record<keyof Pocket, true> = {
+    version: true,
+    module: true,
+    title: true,
+    h: true,
+    html: true,
+    Fragment: true,
+    useState: true,
+    useEffect: true,
+    useLayoutEffect: true,
+    useRef: true,
+    useMemo: true,
+    useCallback: true,
+    useReducer: true,
+    Icon: true,
+    Spinner: true,
+    Loader: true,
+    Markdown: true,
+    Switch: true,
+    me: true,
+    conversationId: true,
+    api: true,
+    on: true,
+    notify: true,
+    rail: true,
+    menu: true,
+    launcher: true,
+    page: true,
+    sheet: true,
+    toolCall: true,
+    openPage: true,
+    closePage: true,
+    openSheet: true,
+    closeSheet: true,
+    style: true,
+    onDispose: true,
+};
 
 /** The owner's meter: a route, events, and a browser module with a rail button and a page. */
 const METER = `/** Meter: a reading on a page of its own. */
@@ -212,6 +252,11 @@ test(
     async () => {
         await page.navigate(`${base}/s/${session}`);
         await until(() => has(rail("Meter")), "the meter's rail button");
+        assert.deepEqual(
+            await withMeter<string[]>(`return JSON.stringify(Object.keys(pocket).sort())`),
+            Object.keys(POCKET_MEMBERS).sort(),
+            "pocket has the members of Pocket in types/pocket.d.ts",
+        );
         await settled();
         await page.click({ selector: rail("Meter") });
         await until(

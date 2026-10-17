@@ -26,7 +26,7 @@ import { join } from "node:path";
 import { after, before, test } from "node:test";
 import type { ExtensionWeb } from "../src/server/host.ts";
 import { createHandler } from "../src/server/http.ts";
-import { opened } from "../src/server/http/extension-routes.ts";
+import { opened } from "../src/server/http/io.ts";
 
 const dataDir = join(root, "data");
 const dropIns = join(dataDir, "extensions");

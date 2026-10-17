@@ -309,6 +309,51 @@ test("agent settings are copied once, not inherited thereafter; plan, budget and
     assert.equal(app.rootOf(target), target);
 });
 
+test("peer-only spend neither consumes the source budget nor changes its displayed spend", async () => {
+    const id = await source();
+    const target = await start(id);
+
+    await app.spend.setSessionBudget(owner(app), id, 0.5);
+    await recordCost(app, target, 1.25);
+    await until(() => app.spend.sessionSpent(target) === 1.25, "peer cost counted");
+
+    const sourceSpend = app.spend.summary(owner(app)).sessions.find((row) => row.id === Number(id));
+    const peerSpend = app.spend
+        .summary(owner(app))
+        .sessions.find((row) => row.id === Number(target));
+
+    assert.equal(sourceSpend?.spent, 0);
+    assert.equal(sourceSpend?.budget, 0.5);
+    assert.equal(peerSpend?.spent, 1.25);
+    assert.deepEqual(app.conversationInfo(await app.room(id)).spend, { spent: 0, budget: 0.5 });
+
+    await say(app, id, "source remains within its own budget");
+    assert.ok(
+        (await modelTexts(app, id)).some((text) =>
+            text.includes("echo: source remains within its own budget"),
+        ),
+    );
+
+    await app.spend.setSessionBudget(owner(app), target, 1);
+    await assert.rejects(
+        app.commands.submit(target, owner(app), {
+            text: "peer is over its own budget",
+            requestId: crypto.randomUUID(),
+        }),
+        /spend limit/,
+    );
+    await assert.rejects(
+        app.linkedChats.send(id, Number(target), "peer message", true, "peer-independent-budget"),
+        /spend limit/,
+    );
+    await say(app, id, "source still works after the peer hits its own limit");
+    assert.ok(
+        (await modelTexts(app, id)).some((text) =>
+            text.includes("echo: source still works after the peer hits its own limit"),
+        ),
+    );
+});
+
 test("start/send replay reuse chat and submission across restart, including creation before initial delivery", async () => {
     const id = await source();
     const key = "stable-start-key";

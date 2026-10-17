@@ -1,7 +1,8 @@
 // The extension gallery: what comes from its index is untrusted, and what it installs never runs on its own.
 import { cleanUp, openApp, owner, root, scriptedModel } from "./helpers.ts";
+import type { Installed } from "../src/server/gallery.ts";
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
     existsSync,
     mkdirSync,
@@ -83,11 +84,14 @@ async function index(...entries: unknown[]) {
 const pin = async (name: string) =>
     (await app.gallery.listing(false)).entries.find((each) => each.name === name)?.pin;
 
-before(async () => {
+/** Open the app on the gallery's data folder (again, for a restart), with the stand-in for the network. */
+async function open() {
     app = await openApp(scriptedModel(), dataDir);
     app.gallery.fetch = async (url) =>
         served.has(url) ? new Response(served.get(url)) : new Response("", { status: 404 });
-});
+}
+
+before(open);
 
 after(async () => {
     await app?.close();
@@ -129,6 +133,19 @@ test("a file that does not match its pinned SHA-256 installs nothing", async () 
     );
 });
 
+test("a code file the source view could not show as it runs installs nothing", async () => {
+    // Node runs it, NUL and all, which the gallery would show only as "binary"; text in the other direction shows
+    // reordered.
+    for (const [name, end] of [
+        ["hidden", "// \0\n"],
+        ["turned", "// \u202e }\n"],
+    ]) {
+        await index(entry(name!, { [`${name}.ts`]: `${clock}${end}` }, "4".repeat(40)));
+        await assert.rejects(app.gallery.install(name!, await pin(name!)), { status: 502 });
+        assert.ok(!existsSync(join(dropIns, `${name}.ts`)));
+    }
+});
+
 test("an installed extension arrives off, even under a name that was turned on before", async () => {
     const commit = "3".repeat(40);
 
@@ -139,7 +156,7 @@ test("an installed extension arrives off, even under a name that was turned on b
     const installed = await app.gallery.install("stale", await pin("stale"));
 
     assert.ok(existsSync(join(dropIns, "stale.ts")));
-    assert.equal(installed.enabled, false);
+    assert.equal((installed as Installed).enabled, false);
     assert.equal(app.loader.enabled("stale.ts"), false);
     assert.ok(!app.loader.extensionNames().includes("test-clock"));
 });
@@ -188,6 +205,18 @@ test("updates and removal never reach past an extension's own files: not through
     assert.ok(existsSync(join(outside, "util.ts")) && existsSync(join(outside, "mine.txt")));
 });
 
+test("an update's preview names a file of the owner's that the new version would replace", async () => {
+    await index(entry("owned", { "owned.ts": clock }, "9".repeat(40)));
+    await app.gallery.install("owned", await pin("owned"));
+    mkdirSync(join(dropIns, "owned"));
+    writeFileSync(join(dropIns, "owned", "settings.json"), "{}\n");
+    await index(
+        entry("owned", { "owned.ts": clock, "owned/settings.json": "[]\n" }, "a".repeat(40)),
+    );
+
+    assert.deepEqual((await app.gallery.updatePreview("owned")).edited, ["owned/settings.json"]);
+});
+
 test("an update the server stopped in the middle of goes back to the version before", async () => {
     const at = (file: string) => join(dropIns, file);
 
@@ -210,9 +239,12 @@ test("an update the server stopped in the middle of goes back to the version bef
     renameSync(steps[0]!.to, steps[0]!.old);
     renameSync(steps[0]!.from, steps[0]!.to);
     renameSync(steps[1]!.to, steps[1]!.old);
+    // Another stopped while it wrote its journal: nothing moved, and the next change to it must not be refused.
+    writeFileSync(at(".torn.gallery-undo.json"), '[{"to": "');
 
     await app.gallery.recover();
 
+    assert.ok(!existsSync(at(".torn.gallery-undo.json")));
     assert.equal(readFileSync(at("halted.ts"), "utf8"), "old module");
     assert.equal(readFileSync(at("halted/util.ts"), "utf8"), "old helper");
     assert.deepEqual(
@@ -230,12 +262,12 @@ test("a revoked version is flagged where it is installed, and is never installed
     await app.gallery.install("revoked", await pin("revoked"));
     await app.setExtensionEnabled(owner(app), "revoked.ts", true);
 
-    // The index revokes it, with a fix only a newer Pi Pocket can use; and, in another entry, the only version there
-    // is.
+    // The index revokes it, with a fix only a newer Pi Pocket can use, and a reason its strict reading refuses (an
+    // emoji's variation selector); and, in another entry, the only version there is.
     await index(
         entry("revoked", { "revoked.ts": clock.replace("now", "later") }, "5".repeat(40), {
             minPocket: "99.0.0",
-            revoked: [{ commit: first, reason: "It sends your config away." }],
+            revoked: [{ commit: first, reason: "\u26a0\ufe0f It sends your config away." }],
         }),
         entry("withdrawn", { "withdrawn.ts": clock }, first, {
             revoked: [{ commit: first, reason: "Withdrawn." }],
@@ -244,9 +276,53 @@ test("a revoked version is flagged where it is installed, and is never installed
 
     const [state] = (await app.gallery.installed()).items.filter((each) => each.name === "revoked");
 
-    assert.equal(state?.revoked, "It sends your config away.");
+    assert.equal(state?.revoked, "\u26a0 It sends your config away.");
     assert.equal(state?.enabled, true);
     await assert.rejects(app.gallery.install("withdrawn", await pin("withdrawn")), {
         status: 409,
     });
+});
+
+test("a theme installs into the themes folder only as pinned, and only when its CSS passes the theme check", async () => {
+    const themes = join(dataDir, "themes");
+
+    const theme = (name: string, css: string, commit: string) => {
+        const files = {
+            [`${name}/theme.json`]: '{ "themeApi": 1, "name": "Test theme" }\n',
+            [`${name}/theme.css`]: css,
+            // A light palette beside the theme: part of the format, so part of an entry.
+            [`${name}/colors-light.toml`]: 'background = "#fafafa"\nforeground = "#222222"\n',
+        };
+        const { pocketApi: _api, declares: _declares, ...rest } = entry(name, files, commit);
+
+        return { ...rest, kind: "theme", themeApi: 1 };
+    };
+
+    const good = ":root { --accent: #c2410c; }\n";
+
+    await index(
+        theme("paper", good, "a".repeat(40)),
+        // It would load the app's own address with the person's cookie: the check refuses it.
+        theme("leaky", ':root { --wallpaper: url("/api/state"); }\n', "b".repeat(40)),
+        theme("swapped", good, "c".repeat(40)),
+    );
+    served.set(
+        `https://raw.githubusercontent.com/someone/pocket-swapped/${"c".repeat(40)}/swapped/theme.css`,
+        good.replace("c2410c", "000000"),
+    );
+
+    await assert.rejects(app.gallery.install("leaky", await pin("leaky")), { status: 422 });
+    await assert.rejects(app.gallery.install("swapped", await pin("swapped")), /SHA-256/);
+    await app.gallery.install("paper", await pin("paper"));
+
+    assert.deepEqual(readdirSync(themes), ["paper"]);
+    assert.equal(readFileSync(join(themes, "paper", "theme.css"), "utf8"), good);
+    assert.equal(app.themes.list().find((each) => each.id === "paper")?.usable, true);
+
+    // The owner's default, and a restart while an update had the theme out of its folder: it stays the default.
+    app.config.themeDefault = { look: "paper", colors: "desktop" };
+    await app.close();
+    renameSync(join(themes, "paper"), join(themes, `.gallery-paper-${randomUUID()}.part`));
+    await open();
+    assert.deepEqual(app.config.themeDefault, { look: "paper", colors: "desktop" });
 });

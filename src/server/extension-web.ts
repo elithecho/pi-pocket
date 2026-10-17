@@ -121,7 +121,7 @@ export function exposedError(error: unknown): { status: number; message: string 
 }
 
 /** The files a browser module's folder serves, by type. Never `.ts`: server code can hold secrets. */
-export const WEB_FILE_TYPES: Readonly<Record<string, string>> = {
+const WEB_FILE_TYPES: Readonly<Record<string, string>> = {
     ".js": "text/javascript; charset=utf-8",
     ".mjs": "text/javascript; charset=utf-8",
     ".css": "text/css; charset=utf-8",
@@ -149,7 +149,7 @@ export function mayUse(user: Pick<User, "role" | "sessions">, access: WebAccess)
 }
 
 /** A module's name, from its file: `server-status.ts` is `server-status`. */
-export function moduleName(file: string): string {
+function moduleName(file: string): string {
     return file.replace(/\.ts$/, "");
 }
 
@@ -184,6 +184,8 @@ export class WebPart {
     readonly routes: Route[] = [];
     client: Client | undefined;
     readonly commands: RegisteredCommand[] = [];
+    /** The tools the module installed with this version: its browser module may describe only their calls. */
+    tools: readonly string[] = [];
     readonly disposers: (() => void)[] = [];
     /** The browser module's folders that are watched, by path. */
     readonly watchers = new Map<string, FSWatcher>();
@@ -507,9 +509,10 @@ export class ExtensionWebs {
         this.#options.log?.(`${part.file}: ${message}`);
     }
 
-    /** The module installed: what it registered replaces what its previous version had. */
-    commit(part: WebPart): void {
+    /** The module installed, with these tools: what it registered replaces what its previous version had. */
+    commit(part: WebPart, tools: readonly string[] = []): void {
         part.sealed = true;
+        part.tools = [...tools];
         this.#staged.delete(part);
 
         // Loaded while the server stopped: it goes at once.
@@ -1073,11 +1076,16 @@ function matchPath(
     return params;
 }
 
-/** What tabs must know of a module's browser module: whether it loads, for whom, and which version. */
+/**
+ * What tabs must know of a module's browser module: whether it loads, for whom, which version, and the tools whose calls
+ * it may describe.
+ */
 function clientKey(part: WebPart | undefined): string {
     const client = part?.client;
 
-    return client === undefined ? "" : `${client.access}:${client.rev}:${client.entry}`;
+    return client === undefined
+        ? ""
+        : `${client.access}:${client.rev}:${client.entry}:${part!.tools.join(",")}`;
 }
 
 /** A folder and the folders in it, as `revision` walks them: not hidden ones, nor `node_modules`. */

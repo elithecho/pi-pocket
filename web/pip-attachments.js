@@ -6,6 +6,8 @@ export function createPipDraft({ loadText, saveText, upload, onError }) {
     let id;
     let generation = 0;
     let revision = 0;
+    // Each file's key, unique in this draft: crypto.randomUUID is missing on plain-http pages (a LAN address).
+    let keys = 0;
     let state = { text: loadText(), files: [], pending: null };
 
     const emit = () => {
@@ -100,7 +102,7 @@ export function createPipDraft({ loadText, saveText, upload, onError }) {
 
             for (const file of files) {
                 const item = {
-                    key: crypto.randomUUID(),
+                    key: `file-${++keys}`,
                     name: file.name,
                     size: file.size,
                     preview: file.type.startsWith("image/") ? URL.createObjectURL(file) : null,

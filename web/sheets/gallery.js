@@ -1,6 +1,7 @@
-// The extension gallery: drop-ins other people wrote, from a reviewed index. Browse and search them, read one's code
-// before it is installed, install it (off), ask Pi to review it, turn it on, update it with a diff, remove it; and
-// share your own as a draft index entry. The owner's alone; the server side is src/server/gallery.ts.
+// The extension gallery: drop-ins and themes other people wrote, from a reviewed index. Browse and search them, read
+// one's code before it is installed, install it (a drop-in off; a theme into Appearance's list, not applied), ask Pi to
+// review a drop-in, turn it on, update it with a diff, remove it; and share your own as a draft index entry. The
+// owner's alone; the server side is src/server/gallery.ts.
 //
 // Everything the index says is untrusted: it shows as text only, and links go only to addresses the server built.
 import { useEffect, useRef, useState } from "preact/hooks";
@@ -18,6 +19,7 @@ import {
     store,
     uid,
 } from "../store.js";
+import { BASE_LOOK, prefs, setPrefs } from "../theme.js";
 import { copyText, formatBytes, html, Icon, Loader, Sheet, timeAgo } from "../ui.js";
 
 /** The owner's, while its module is on. */
@@ -46,11 +48,12 @@ function useRoute(path, setData, setProblem) {
 }
 
 const short = (commit) => (commit ?? "").slice(0, 7);
-const plural = (count, word) => `${count} ${word}${count === 1 ? "" : "s"}`;
+const plural = (count, word) =>
+    `${count} ${count === 1 ? word : word.endsWith("y") ? `${word.slice(0, -1)}ies` : `${word}s`}`;
 const revocation = (entry, commit) => entry.revoked.find((each) => each.commit === commit)?.reason;
 
 /** Who a browser module or a route is for, in words. */
-const ACCESS_WORDS = {
+export const ACCESS_WORDS = {
     owner: "the owner",
     steer: "people who can steer",
     view: "everyone who sees every session",
@@ -85,6 +88,10 @@ const declared = (declares, key) =>
 
 const RISK =
     "A drop-in runs inside the server with your rights, in every session. Lancet Guard does not see what its code does.";
+const THEME_RISK =
+    "A theme is CSS, fonts, and images. It runs no code, and it loads nothing from other sites. But it can hide or relabel what people see, approvals too: install only themes you trust.";
+
+const isTheme = (item) => item?.kind === "theme";
 
 /** A link out, to an address the server built (or a GitHub profile): never one the index wrote. */
 const Out = ({ href, class: className = "", children }) =>
@@ -150,6 +157,7 @@ function EntryRow({ entry }) {
             <span class="gallery-row-head">
                 <span class="gallery-row-title">${entry.title}</span>
                 <span class="gallery-row-name mono">${entry.name}</span>
+                ${isTheme(entry) && html`<span class="pi-tag gallery-plain">Theme</span>`}
             </span>
             ${entry.description && html`<span class="gallery-row-desc">${entry.description}</span>`}
             <span class="gallery-row-meta">
@@ -269,6 +277,8 @@ export function GallerySheet() {
     const { data, problem, loading, load } = useListing();
     const [query, setQuery] = useState("");
     const [tag, setTag] = useState(null);
+    // "theme", "extension", or null for both.
+    const [kind, setKind] = useState(null);
     const [showInvalid, setShowInvalid] = useState(false);
     const needle = query.trim().toLowerCase();
     // A version the index revoked is not offered, unless it is the one installed here.
@@ -276,8 +286,11 @@ export function GallerySheet() {
         (entry) => entry.installed !== null || revocation(entry, entry.source.commit) === undefined,
     );
     const tags = topTags(offered, 10);
+    // The kinds as a filter, while the index offers both.
+    const kinds = offered.some(isTheme) && !offered.every(isTheme) ? ["extension", "theme"] : [];
     const matches = offered.filter(
         (entry) =>
+            (kind === null || (kind === "theme") === isTheme(entry)) &&
             (tag === null || entry.tags.includes(tag)) &&
             (needle === "" ||
                 [entry.name, entry.title, entry.description, ...entry.tags].some((text) =>
@@ -289,7 +302,7 @@ export function GallerySheet() {
 
     return html`<${Sheet} title="Find extensions" onClose=${closeSheet} wide=${true} className="gallery">
         <p class="muted small">
-            Drop-ins other people wrote, from a reviewed index. They install turned off: read their code, or ask Pi to review it, before you turn one on.
+            Drop-ins and themes other people wrote, from a reviewed index. Drop-ins install turned off: read their code, or ask Pi to review it, before you turn one on. A theme installs into the list in Appearance, where each person can choose it.
         </p>
         ${problem && html`<div class="error-box small">${problem}</div>`}
         ${data?.error && html`<div class="error-box small">${data.error}</div>`}
@@ -301,16 +314,26 @@ export function GallerySheet() {
                 class="find-input"
                 type="search"
                 autofocus
-                placeholder="Search extensions"
-                aria-label="Search extensions: names, descriptions, and tags"
+                placeholder=${offered.some(isTheme) ? "Search extensions and themes" : "Search extensions"}
+                aria-label="Search the gallery: names, descriptions, and tags"
                 value=${query}
                 onInput=${(event) => setQuery(event.currentTarget.value)}
             />`
         }
         ${
-            tags.length > 1 &&
-            html`<div class="gallery-tags" role="group" aria-label="Tags">
-                ${tags.map(
+            (tags.length > 1 || kinds.length > 0) &&
+            html`<div class="gallery-tags" role="group" aria-label="Kinds and tags">
+                ${kinds.map(
+                    (each) => html`<button
+                        key=${`kind-${each}`}
+                        class=${`gallery-tag ${kind === each ? "on" : ""}`}
+                        aria-pressed=${kind === each}
+                        onClick=${() => setKind(kind === each ? null : each)}
+                    >
+                        ${each === "theme" ? "Themes" : "Extensions"}
+                    </button>`,
+                )}
+                ${(tags.length > 1 ? tags : []).map(
                     (each) => html`<button
                         key=${each}
                         class=${`gallery-tag ${tag === each ? "on" : ""}`}
@@ -326,7 +349,7 @@ export function GallerySheet() {
             data &&
             offered.length === 0 &&
             !data.error &&
-            html`<p class="muted">The index has no extensions for this Pi Pocket yet.</p>`
+            html`<p class="muted">The index has nothing for this Pi Pocket yet.</p>`
         }
         ${
             matches.length > 0 &&
@@ -338,7 +361,7 @@ export function GallerySheet() {
             offered.length > 0 &&
             matches.length === 0 &&
             html`<p class="muted">
-                No extension matches${needle ? ` “${query.trim()}”` : ""}${tag ? ` with the tag ${tag}` : ""}.
+                Nothing matches${needle ? ` “${query.trim()}”` : ""}${kind ? ` in ${kind === "theme" ? "themes" : "extensions"}` : ""}${tag ? ` with the tag ${tag}` : ""}.
             </p>`
         }
         ${
@@ -370,7 +393,7 @@ export function GallerySheet() {
             data &&
             (hidden.incompatible > 0 || hidden.invalid.length > 0) &&
             html`<div class="muted small gallery-hidden">
-                ${hidden.incompatible > 0 && html`<span>${plural(hidden.incompatible, "extension")} ${hidden.incompatible === 1 ? "needs" : "need"} a newer Pi Pocket.</span>`}
+                ${hidden.incompatible > 0 && html`<span>${plural(hidden.incompatible, "entry")} ${hidden.incompatible === 1 ? "needs" : "need"} a newer Pi Pocket.</span>`}
                 ${
                     hidden.invalid.length > 0 &&
                     html`<button class="link small" onClick=${() => setShowInvalid(!showInvalid)}>
@@ -533,11 +556,18 @@ export function GalleryEntrySheet({ name }) {
         <//>`;
     }
 
+    if (isTheme(entry ?? installed)) {
+        return html`<${ThemeEntry}
+            name=${name}
+            entry=${entry}
+            installed=${installed}
+            problem=${problem}
+            busy=${busy}
+            run=${run}
+        />`;
+    }
+
     const title = installed?.title ?? entry.title;
-    const version = installed?.version ?? entry.version;
-    const repo = installed?.repo ?? entry.source.repo;
-    const commit = installed?.commit ?? entry.source.commit;
-    const sourceUrl = installed?.sourceUrl ?? entry.sourceUrl;
     const declares = installed?.declares ?? entry.declares;
     // The index's files are these when it offers the version here, or nothing is installed.
     const files =
@@ -598,49 +628,11 @@ export function GalleryEntrySheet({ name }) {
                 ${entry.tags.map((tag) => html`<span class="gallery-tag-text" key=${tag}>#${tag}</span>`)}
             </div>`
         }
-        <dl class="pi-facts">
-            ${
-                entry &&
-                html`<div>
-                    <dt>Author</dt>
-                    <dd>
-                        ${entry.author.name}
-                        ${
-                            entry.author.github &&
-                            html` · <${Out} href=${`https://github.com/${entry.author.github}`}>@${entry.author.github}<//>`
-                        }
-                    </dd>
-                </div>`
-            }
-            <div>
-                <dt>Version</dt>
-                <dd>
-                    ${version}${installed?.update ? html`<span class="warn"> · ${installed.update.version} available</span>` : ""}
-                </dd>
-            </div>
-            <div>
-                <dt>Source</dt>
-                <dd class="mono">
-                    <${Out} href=${sourceUrl}>${repo} @ ${short(commit)}<//>
-                </dd>
-            </div>
-            ${
-                entry &&
-                html`<div>
-                    <dt>Needs</dt>
-                    <dd>Pi Pocket ${entry.minPocket} or newer · extension API ${entry.pocketApi}</dd>
-                </div>`
-            }
-            ${
-                installed &&
-                html`<div>
-                    <dt>Installed</dt>
-                    <dd>
-                        ${timeAgo(installed.installedAt)}${installed.unlisted ? ` · ${installed.unlisted}` : ""}
-                    </dd>
-                </div>`
-            }
-        </dl>
+        <${EntryFacts}
+            entry=${entry}
+            installed=${installed}
+            needs=${entry && `Pi Pocket ${entry.minPocket} or newer · extension API ${entry.pocketApi}`}
+        />
         ${
             installed?.changed.length > 0 &&
             html`<div class="gallery-warn small">
@@ -718,6 +710,181 @@ export function GalleryEntrySheet({ name }) {
             ${
                 installed &&
                 html`<button class="button ghost" disabled=${busy} onClick=${uninstall}>Uninstall</button>`
+            }
+        </div>
+    <//>`;
+}
+
+/** The facts both kinds of entry show: who made it, its version, where its files are, what it needs, and when. */
+function EntryFacts({ entry, installed, needs }) {
+    const version = installed?.version ?? entry.version;
+    const repo = installed?.repo ?? entry.source.repo;
+    const commit = installed?.commit ?? entry.source.commit;
+
+    return html`<dl class="pi-facts">
+        ${
+            entry &&
+            html`<div>
+                <dt>Author</dt>
+                <dd>
+                    ${entry.author.name}
+                    ${
+                        entry.author.github &&
+                        html` · <${Out} href=${`https://github.com/${entry.author.github}`}>@${entry.author.github}<//>`
+                    }
+                </dd>
+            </div>`
+        }
+        <div>
+            <dt>Version</dt>
+            <dd>
+                ${version}${installed?.update ? html`<span class="warn"> · ${installed.update.version} available</span>` : ""}
+            </dd>
+        </div>
+        <div>
+            <dt>Source</dt>
+            <dd class="mono">
+                <${Out} href=${installed?.sourceUrl ?? entry.sourceUrl}>${repo} @ ${short(commit)}<//>
+            </dd>
+        </div>
+        ${
+            entry &&
+            html`<div>
+                <dt>Needs</dt>
+                <dd>${needs}</dd>
+            </div>`
+        }
+        ${
+            installed &&
+            html`<div>
+                <dt>Installed</dt>
+                <dd>
+                    ${timeAgo(installed.installedAt)}${installed.unlisted ? ` · ${installed.unlisted}` : ""}
+                </dd>
+            </div>`
+        }
+    </dl>`;
+}
+
+/**
+ * A theme's entry: what it is, its files, and installing, updating, and removing it. Installing puts it in the list in
+ * Appearance; it changes nothing until someone chooses it there.
+ */
+function ThemeEntry({ name, entry, installed, problem, busy, run }) {
+    const title = installed?.title ?? entry.title;
+    const files =
+        entry && (!installed || entry.source.commit === installed.commit) ? entry.files : null;
+    const offeredRevoked = !installed && entry ? revocation(entry, entry.source.commit) : undefined;
+
+    const install = () =>
+        run(() => galleryApi(`install/${encodeURIComponent(name)}`, { pin: entry.pin }));
+
+    const uninstall = () => {
+        if (
+            confirm(
+                `Remove the theme ${title}?\n\nIts folder moves to themes/.removed/ in the data folder. Browsers that use it go back to Pocket.`,
+            )
+        ) {
+            run(async () => {
+                await galleryApi(`uninstall/${encodeURIComponent(name)}`, {});
+
+                if (prefs().look === name) {
+                    setPrefs({ look: BASE_LOOK });
+                }
+            });
+        }
+    };
+
+    return html`<${Sheet} title=${title} onClose=${closeSheet} className="gallery">
+        ${problem && html`<div class="error-box small">${problem}</div>`}
+        ${
+            (installed?.revoked ?? offeredRevoked) &&
+            html`<div class="error-box gallery-revoked" role="alert">
+                <strong>The gallery revoked this version.</strong> Its reason: ${installed?.revoked ?? offeredRevoked}
+            </div>`
+        }
+        <div class="gallery-head">
+            <h3 class="pi-title">${title}</h3>
+            <span class="mono muted small">${name}</span>
+            <span class="pi-tag gallery-plain">Theme</span>
+            <${StatePills} installed=${installed} />
+        </div>
+        ${entry?.description && html`<p class="gallery-description">${entry.description}</p>`}
+        ${
+            entry &&
+            entry.tags.length > 0 &&
+            html`<div class="gallery-row-meta">
+                ${entry.tags.map((tag) => html`<span class="gallery-tag-text" key=${tag}>#${tag}</span>`)}
+            </div>`
+        }
+        <${EntryFacts}
+            entry=${entry}
+            installed=${installed}
+            needs=${entry && `Pi Pocket ${entry.minPocket} or newer · theme API ${entry.themeApi}`}
+        />
+        ${
+            installed?.problem &&
+            html`<div class="gallery-warn small">Appearance does not offer it as it is: ${installed.problem}</div>`
+        }
+        ${
+            installed?.changed.length > 0 &&
+            html`<div class="gallery-warn small">
+                Not as installed (edited since, or gone): <span class="mono">${installed.changed.join(", ")}</span>
+            </div>`
+        }
+        ${
+            files &&
+            html`<div class="group">
+                <div class="group-title">Files</div>
+                <div class="sheet-list gallery-files">
+                    ${files.map(
+                        (file) => html`<div class="gallery-file" key=${file.name}>
+                            <span class="mono">${file.name}</span>
+                            <span class="muted small">${formatBytes(file.size)}</span>
+                        </div>`,
+                    )}
+                </div>
+            </div>`
+        }
+        <p class="gallery-warn small">${THEME_RISK}</p>
+        <div class="gallery-actions">
+            ${
+                !installed &&
+                html`<button
+                    class="button primary"
+                    disabled=${busy || offeredRevoked !== undefined}
+                    onClick=${install}
+                >
+                    Install
+                </button>`
+            }
+            ${
+                installed &&
+                installed.update &&
+                html`<button
+                    class="button primary"
+                    disabled=${busy}
+                    onClick=${() => openSheet({ type: "gallery-update", id: name })}
+                >
+                    Update to ${installed.update.version}
+                </button>`
+            }
+            ${
+                installed &&
+                html`<button class="button" onClick=${() => openSheet({ type: "appearance" })}>
+                    Choose it in Appearance
+                </button>`
+            }
+            <button
+                class="button"
+                disabled=${busy}
+                onClick=${() => openSheet({ type: "gallery-source", id: name })}
+            >
+                View source
+            </button>
+            ${
+                installed &&
+                html`<button class="button ghost" disabled=${busy} onClick=${uninstall}>Remove</button>`
             }
         </div>
     <//>`;
@@ -871,7 +1038,8 @@ export function GalleryUpdateSheet({ name }) {
         <//>`;
     }
 
-    const changes = declarationChanges(data.declares.before, data.declares.after);
+    const changes =
+        data.declares === null ? [] : declarationChanges(data.declares.before, data.declares.after);
 
     return html`<${Sheet} title=${`Update ${data.title}`} onClose=${closeSheet} wide=${true} className="gallery">
         <dl class="pi-facts">
@@ -895,28 +1063,34 @@ export function GalleryUpdateSheet({ name }) {
         ${
             data.edited.length > 0 &&
             html`<div class="gallery-warn small" role="alert">
-                Edited here since it was installed: <span class="mono">${data.edited.join(", ")}</span>. The diff is against your edits, and the update replaces them.
+                Yours here, edited since it was installed or never part of it: <span class="mono">${data.edited.join(", ")}</span>. The diff is against your files, and the update replaces them.
             </div>`
         }
-        <div class="group">
-            <div class="group-title">What it declares</div>
-            ${
-                changes.length === 0
-                    ? html`<p class="muted small">The same as before.</p>`
-                    : html`<dl class="pi-facts gallery-declares">
-                          ${changes.map(
-                              (change) => html`<div key=${change.label}>
-                                  <dt>${change.label}</dt>
-                                  <dd>
-                                      ${change.added?.length > 0 && html`<div class="mono gallery-added">+ ${change.added.join(", ")}</div>`}
-                                      ${change.removed?.length > 0 && html`<div class="mono gallery-removed">− ${change.removed.join(", ")}</div>`}
-                                      ${change.from !== undefined && html`<div>${change.from} → ${change.to}</div>`}
-                                  </dd>
-                              </div>`,
-                          )}
-                      </dl>`
-            }
-        </div>
+        ${
+            data.declares === null
+                ? html`<p class="muted small">
+                      It is checked as every theme is before it is in place. The version you have now goes to themes/.removed/ in the data folder.
+                  </p>`
+                : html`<div class="group">
+                      <div class="group-title">What it declares</div>
+                      ${
+                          changes.length === 0
+                              ? html`<p class="muted small">The same as before.</p>`
+                              : html`<dl class="pi-facts gallery-declares">
+                                    ${changes.map(
+                                        (change) => html`<div key=${change.label}>
+                                            <dt>${change.label}</dt>
+                                            <dd>
+                                                ${change.added?.length > 0 && html`<div class="mono gallery-added">+ ${change.added.join(", ")}</div>`}
+                                                ${change.removed?.length > 0 && html`<div class="mono gallery-removed">− ${change.removed.join(", ")}</div>`}
+                                                ${change.from !== undefined && html`<div>${change.from} → ${change.to}</div>`}
+                                            </dd>
+                                        </div>`,
+                                    )}
+                                </dl>`
+                      }
+                  </div>`
+        }
         <div class="group">
             <div class="group-title">Files</div>
             <div class="sheet-list gallery-files">
@@ -1006,10 +1180,11 @@ function Field({ id, label, hint, value, onInput, problem, placeholder, mono = t
 }
 
 /**
- * Share one of your own drop-ins: the checks, where its files are on GitHub (only its author knows), its index entry
- * made from both, and the pull request, which opens only once the entry can pass the index's checks.
+ * Share one of your own drop-ins, or with `theme`, one of your theme folders (`file` is its id): the checks, where its
+ * files are on GitHub (only its author knows), its index entry made from both, and the pull request, which opens only
+ * once the entry can pass the index's checks.
  */
-export function GalleryShareSheet({ file }) {
+export function GalleryShareSheet({ file, theme = false }) {
     const [data, setData] = useState(null);
     const [problem, setProblem] = useState(null);
     const [form, setForm] = useState({
@@ -1021,10 +1196,14 @@ export function GalleryShareSheet({ file }) {
         name: null,
     });
 
-    useRoute(`share/${encodeURIComponent(file)}`, setData, setProblem);
+    useRoute(`${theme ? "share-theme" : "share"}/${encodeURIComponent(file)}`, setData, setProblem);
+    // A theme by its name, as Appearance shows it; a drop-in by its file.
+    const shareName = theme
+        ? (store.state.themeList?.find((each) => each.id === file)?.name ?? file)
+        : file;
 
     if (!data) {
-        return html`<${Sheet} title=${`Share ${file}`} onClose=${closeSheet} wide=${true} className="gallery">
+        return html`<${Sheet} title=${`Share ${shareName}`} onClose=${closeSheet} wide=${true} className="gallery">
             ${problem ? html`<div class="error-box small">${problem}</div>` : html`<${Loader} label="Checking it" />`}
         <//>`;
     }
@@ -1066,7 +1245,7 @@ export function GalleryShareSheet({ file }) {
     const filled = data.newEntryPage && `${data.newEntryPage}&value=${encodeURIComponent(text)}`;
     const link = filled && filled.length <= LINK_LIMIT ? filled : data.newEntryPage;
 
-    return html`<${Sheet} title=${`Share ${file}`} onClose=${closeSheet} wide=${true} className="gallery">
+    return html`<${Sheet} title=${`Share ${shareName}`} onClose=${closeSheet} wide=${true} className="gallery">
         <p class="muted small">
             To share it, add its entry to the gallery's index with a pull request. Pi Pocket makes no GitHub calls: you put its files on GitHub and open the pull request yourself.
         </p>
@@ -1126,7 +1305,7 @@ export function GalleryShareSheet({ file }) {
                     id="share-path"
                     label="Folder (optional)"
                     hint="Only when the files are not at the top of the repository."
-                    placeholder="extension"
+                    placeholder=${theme ? "theme" : "extension"}
                     value=${form.path}
                     onInput=${set("path")}
                     problem=${wrong.path}
@@ -1134,8 +1313,8 @@ export function GalleryShareSheet({ file }) {
                 <${Field}
                     id="share-tags"
                     label="Tags"
-                    hint="A few words people search for, such as usage, time."
-                    placeholder="usage, limits"
+                    hint=${`A few words people search for, such as ${theme ? "dark, calm" : "usage, time"}.`}
+                    placeholder=${theme ? "dark, minimal" : "usage, limits"}
                     value=${form.tags}
                     onInput=${set("tags")}
                     problem=${wrong.tags}

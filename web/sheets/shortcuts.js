@@ -87,7 +87,7 @@ export function ShortcutsSheet() {
             </div>`,
         )}
         <p class="muted small">
-            In the launcher, start with <kbd>></kbd> for actions, <kbd>@</kbd> for sessions, or <kbd>#</kbd> for themes. Arrowing onto a theme shows it; Enter keeps it.
+            In the launcher, start with <kbd>></kbd> for actions, <kbd>@</kbd> for sessions, or <kbd>#</kbd> for themes. Arrowing onto colors shows them; Enter keeps them.
         </p>
     <//>`;
 }

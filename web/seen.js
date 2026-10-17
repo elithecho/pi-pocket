@@ -66,12 +66,16 @@ export function markSeen(id) {
     store.set({ peekSeen: { ...store.state.peekSeen, [id]: at } });
 }
 
-/** A session whose run ended since this browser last had it open. */
+/**
+ * A session whose run ended since this browser last had it open. A run older than the marks are kept counts as seen:
+ * its mark may be gone, with the server up all that time.
+ */
 export function finishedUnseen(session, state = store.state) {
     return (
         since !== null &&
         !session.busy &&
         session.endedAt !== undefined &&
+        serverNow() - session.endedAt < SEEN_KEEP_MS &&
         session.endedAt > Math.max(since, state.peekSeen?.[session.id] ?? 0)
     );
 }

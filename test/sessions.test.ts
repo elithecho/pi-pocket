@@ -234,6 +234,30 @@ test("an edited message keeps the files attached to the original", async () => {
     assert.ok(text.includes(path), "the attachment list comes along");
 });
 
+test("an edit of a message of files alone from before 0.14.0 keeps its files", async () => {
+    const id = await newSession(app);
+
+    // What 0.13 stored: the heading without the blank line before it.
+    await say(
+        app,
+        id,
+        "Attached files (saved on the server):\n- /tmp/x/a.txt (a.txt, text/plain, 3 bytes)",
+    );
+    const [message] = await ofKind(id, "pi.user");
+    const { id: fork } = await app.commands.resend(id, owner(app), {
+        entryId: Number(message!.id),
+        text: "summarize it",
+    });
+
+    await until(
+        async () => (await ofKind(fork, "pi.assistant")).length === 1,
+        "the edit to be answered",
+    );
+    const [edited] = await ofKind(fork, "pi.user");
+
+    assert.ok(JSON.stringify(edited!.model).includes("/tmp/x/a.txt"), "the files come along");
+});
+
 test("sending a message again to another model forks before it and switches the fork's model", async () => {
     const id = await newSession(app);
 

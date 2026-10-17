@@ -700,6 +700,7 @@ export function SubagentsBoard() {
 
     return html`<section
         class=${`board ${phone ? "phone" : ""}`}
+        data-part="subagents-board"
         ref=${box}
         aria-label="Subagents in every session"
     >

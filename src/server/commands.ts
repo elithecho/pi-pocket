@@ -45,7 +45,13 @@ import {
     type SubagentRecord,
     SubagentsDoc,
 } from "./docs.ts";
-import { ATTACHMENTS_HEADING, FILE_BLOCK, FROM_PREFIX, NOTE_ENTRY } from "./entry-format.ts";
+import {
+    ATTACHMENTS_HEADING,
+    FILE_BLOCK,
+    FROM_PREFIX,
+    NOTE_ENTRY,
+    splitAttachments,
+} from "./entry-format.ts";
 import { describe, HttpError, optionalText } from "./errors.ts";
 import { homePath } from "./paths.ts";
 import { mentionedPaths, viewFile } from "./files.ts";
@@ -753,8 +759,9 @@ export class Commands {
             (file) =>
                 `- ${file.path} (${file.name}, ${file.mime || "unknown type"}, ${file.size} bytes)`,
         );
+        // The heading whole, with files alone too: what reads the message splits it there.
         const written =
-            lines.length === 0 ? text : `${text}${ATTACHMENTS_HEADING}${lines.join("\n")}`.trim();
+            lines.length === 0 ? text : `${text}${ATTACHMENTS_HEADING}${lines.join("\n")}`;
         const body = this.messageText(
             user,
             via === undefined ? written : `[via ${via}] ${written}`,
@@ -1895,12 +1902,10 @@ export class Commands {
         }
 
         const original = userContent(entry.model?.[0]);
-        const [written = "", files] = original.text.split(ATTACHMENTS_HEADING);
+        // Who sent it comes first, then the heading, whole or (from before 0.14.0) without its blank line.
+        const [written, files] = splitAttachments(original.text.replace(FROM_PREFIX, ""));
         // An edit that changes nothing is the same as sending the message again.
-        const edit =
-            edited !== undefined && edited !== written.replace(FROM_PREFIX, "").trim()
-                ? edited
-                : undefined;
+        const edit = edited !== undefined && edited !== written.trim() ? edited : undefined;
 
         if (edit === "" && files === undefined) {
             throw new HttpError(400, "Nothing to send");
@@ -1908,10 +1913,10 @@ export class Commands {
 
         // Sent again, edited or not, the message is from whoever sent it again, with the original's files attached: what
         // Pi does next is on them.
-        const body = edit ?? written.replace(FROM_PREFIX, "").trim();
+        const body = edit ?? written.trim();
         const text = this.messageText(
             user,
-            files === undefined ? body : `${body}${ATTACHMENTS_HEADING}${files}`.trim(),
+            files === undefined ? body : `${body}${ATTACHMENTS_HEADING}${files}`,
         );
         const author =
             (await app.harness.snapshot(AuthorsDoc, id, context))?.entries[String(entryId)] ??

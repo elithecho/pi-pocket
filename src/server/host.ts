@@ -265,6 +265,7 @@ export interface PocketHost {
         | "uninstall"
         | "review"
         | "share"
+        | "shareTheme"
     >;
 }
 

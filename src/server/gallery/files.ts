@@ -25,7 +25,7 @@ type Step = { to: string; old?: string; from?: string };
 
 const JOURNAL = /^\.([a-z0-9][a-z0-9_-]{1,63})\.gallery-undo\.json$/;
 
-const journalOf = (root: string, name: string) => join(root, `.${name}.gallery-undo.json`);
+export const journalOf = (root: string, name: string) => join(root, `.${name}.gallery-undo.json`);
 
 export const exists = (path: string) =>
     lstat(path).then(
@@ -334,7 +334,20 @@ export async function recover(root: string): Promise<{ name: string; failed: str
                 throw new Error("it names files outside the extensions folder");
             }
         } catch (error) {
-            done.push({ name, failed: [`its journal cannot be read: ${describe(error)}`] });
+            // It is written whole before anything moves: one that cannot be read moved nothing. It goes aside, so that
+            // `place` takes the next change to this extension.
+            const aside = `${file}.${randomUUID()}.unread`;
+            const kept = await rename(join(root, file), join(root, aside)).then(
+                () => `it is kept as ${aside}`,
+                (again: unknown) => `moving it aside failed too: ${describe(again)}`,
+            );
+
+            done.push({
+                name,
+                failed: [
+                    `its journal cannot be read (${describe(error)}), so it was not used: ${kept}`,
+                ],
+            });
             continue;
         }
 

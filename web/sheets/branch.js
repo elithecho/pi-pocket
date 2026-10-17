@@ -3,7 +3,16 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { actions, attempt, canSteer, closeSheet, notify, scoped, store } from "../store.js";
 import { useDragToClose } from "../gestures.js";
-import { anchorStyle, BOTTOM_SHEETS, html, Icon, popAnchor, shortPath, timeAgo } from "../ui.js";
+import {
+    anchorStyle,
+    BOTTOM_SHEETS,
+    html,
+    Icon,
+    popAnchor,
+    scrimPress,
+    shortPath,
+    timeAgo,
+} from "../ui.js";
 
 const coarsePointer = matchMedia("(pointer: coarse)").matches;
 
@@ -263,7 +272,7 @@ export function BranchPicker() {
 
     return html`<div
         class="overlay pop-overlay"
-        onMouseDown=${(event) => event.target === event.currentTarget && closeSheet()}
+        onMouseDown=${scrimPress(closeSheet)}
     >
         <section
             class=${`pop-menu branch-picker ${anchor ? (anchor.down ? "down" : "") : "free"}`}

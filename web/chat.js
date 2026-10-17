@@ -8,6 +8,7 @@ import {
     actions,
     attempt,
     canSteer,
+    canToggleTurns,
     chatLogShown,
     closePeople,
     closeSheet,
@@ -150,7 +151,10 @@ export function jumpToEntry(entryId) {
             ? (found.closest(".activity")?.querySelector(".activity-head") ?? found)
             : found;
 
-        element.scrollIntoView({ block: "center", behavior: "smooth" });
+        // A long one from its top, where it starts: centered, its middle would show, and what was found may be above.
+        const tall = element.getBoundingClientRect().height > innerHeight / 2;
+
+        element.scrollIntoView({ block: tall ? "start" : "center", behavior: "smooth" });
         element.classList.remove("flash");
         void element.offsetWidth;
         element.classList.add("flash");
@@ -689,13 +693,7 @@ function PeopleRoster() {
     const { presence, users, me, view } = store.state;
     const turns = view.turns;
     const driver = users.find((person) => person.id === turns?.driver)?.name ?? "No one";
-    const canToggle =
-        canSteer() &&
-        (!turns?.on ||
-            turns.driver === me?.id ||
-            me?.role === "owner" ||
-            !turns.driver ||
-            !presence.some((person) => person.id === turns.driver));
+    const canToggle = canToggleTurns();
 
     return html`<div class="people-roster">
         ${presence.map((person) => {
@@ -855,6 +853,8 @@ export function PeoplePanel({ leaving = false }) {
 
     return html`<section
         class=${`people window ${leaving ? "leaving" : ""}`}
+        data-part="people-panel"
+        data-state=${leaving ? "closing" : undefined}
         aria-label="People"
         inert=${leaving}
         onKeyDown=${keepEscape}

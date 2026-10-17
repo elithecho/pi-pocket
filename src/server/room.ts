@@ -46,7 +46,7 @@ import {
     TurnsDoc,
     WatchDoc,
 } from "./docs.ts";
-import { SHELL_ENTRY } from "./entry-format.ts";
+import { COMMAND_ENTRY, SHELL_ENTRY } from "./entry-format.ts";
 import { agentInfo } from "./models.ts";
 import {
     type ClientEntry,
@@ -675,16 +675,19 @@ export class Room {
             waiting.add(id);
 
             if (item.mode === "write") {
+                const command = String(
+                    (item.entry.data as { command?: unknown } | undefined)?.command ?? "",
+                );
+
+                // A `!` command, or an extension command's card written while Pi works.
                 return {
                     id,
                     mode: item.mode,
                     ...(item.entry.kind === SHELL_ENTRY
-                        ? {
-                              text: cutQueued(
-                                  `$ ${String((item.entry.data as { command?: unknown } | undefined)?.command ?? "")}`,
-                              ),
-                          }
-                        : {}),
+                        ? { text: cutQueued(`$ ${command}`) }
+                        : item.entry.kind === COMMAND_ENTRY
+                          ? { text: cutQueued(`/${command}`) }
+                          : {}),
                 };
             }
 

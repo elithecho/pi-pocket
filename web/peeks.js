@@ -20,7 +20,7 @@ import {
     workspaceOrder,
 } from "./store.js";
 import { prefs, setPrefs } from "./theme.js";
-import { html, Icon, shortPath, usePresence } from "./ui.js";
+import { html, Icon, railState, shortPath, usePresence } from "./ui.js";
 
 /** Wide enough for the column beside the conversation: where People and the Browser panel dock too. */
 export const PEEK_WIDE = matchMedia("(min-width: 1100px)");
@@ -155,6 +155,8 @@ export function PeeksRailButton() {
 
     return html`<button
         class=${`rail-button rail-peeks ${on ? "open" : ""}`}
+        data-part="rail-button"
+        data-state=${railState(on)}
         title=${on ? "Hide peek tiles (Alt+P)" : "Peek at other sessions (Alt+P)"}
         aria-label="Peek tiles"
         aria-pressed=${on}
@@ -564,7 +566,12 @@ class PeekTile extends Component {
         // The last few lines, which the tile gives two lines of text each.
         const shown = compact ? (lines ?? []).slice(-1) : lines?.slice(-3);
 
-        return html`<div class=${`peek ${status}`} data-peek=${session.id}>
+        return html`<div
+            class=${`peek ${status}`}
+            data-part="peek-tile"
+            data-state=${status}
+            data-peek=${session.id}
+        >
             <button class="peek-head" title=${`Open ${title}`} onClick=${open}>
                 <span class="peek-name">
                     <span
@@ -707,6 +714,8 @@ function PeekColumn({ tiles, leaving = false }) {
 
     return html`<aside
         class=${`peeks window ${leaving ? "leaving" : ""}`}
+        data-part="peeks"
+        data-state=${leaving ? "closing" : undefined}
         aria-label="Peeks"
         inert=${leaving}
     >

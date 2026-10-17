@@ -7,7 +7,7 @@ import { extensionMenuItems, safeMode } from "../extension-ui.js";
 import { useChanges } from "../diff.js";
 import { filesAvailable, setFilesOpen } from "../files-panel.js";
 import { peeksOn, togglePeeks } from "../peeks.js";
-import { RefreshModels } from "../model-refresh.js";
+import { modelRefreshAvailable, refreshModels } from "../model-refresh.js";
 import { openPip, openPipModel, pipAvailable, pipUnread } from "../pip.js";
 import { setArchived } from "../sessions.js";
 import { openSubagent } from "../subagents.js";
@@ -16,6 +16,7 @@ import {
     api,
     attempt,
     canSteer,
+    canToggleTurns,
     closeSheet,
     collab,
     navigate,
@@ -26,7 +27,7 @@ import {
     signOut,
     store,
 } from "../store.js";
-import { isPinned, paletteOf, togglePin } from "../theme.js";
+import { isPinned, lookLabel, togglePin } from "../theme.js";
 import { currentTrust, trustAvailable } from "../trust.js";
 import { branchAvailable } from "./branch.js";
 import { memoryAvailable, memoryHint, useMemory } from "./memory.js";
@@ -235,8 +236,18 @@ function MenuFrame({ title, children }) {
 
             const focused = document.activeElement;
             const back = opener?.isConnected ? opener : button;
+            // As sheets.js does: not behind a sheet the menu opened, and not into a text field on a touch screen,
+            // where its keyboard would pop up.
+            const field =
+                matchMedia("(pointer: coarse)").matches &&
+                back?.matches("input, textarea, [contenteditable]");
 
-            if ((focused === document.body || element.contains(focused)) && back?.isConnected) {
+            if (
+                !store.state.sheet &&
+                !field &&
+                (focused === document.body || element.contains(focused)) &&
+                back?.isConnected
+            ) {
                 back.focus({ preventScroll: true });
             }
         };
@@ -296,7 +307,7 @@ function MenuFrame({ title, children }) {
         }
     };
 
-    return html`<div class="nav-menu-host" ref=${host} onKeyDown=${onKey}>
+    return html`<div class="nav-menu-host" data-part="menu" ref=${host} onKeyDown=${onKey}>
         <${Sheet} title=${title} onClose=${closeSheet} className="nav-menu">
             ${children}
         <//>
@@ -339,14 +350,8 @@ export function MenuSheet({ places = true, settingsOnly = false }) {
     const steer = canSteer();
     const session = conversation?.kind === "session";
     const turns = view.turns;
-    // While take turns is on, settings belong to the driver. Turning it off also works for the owner, or when the
-    // driver has left: the same rules the server applies.
+    // While take turns is on, settings belong to the driver.
     const driving = !turns?.on || turns.driver === me?.id;
-    const canStopTurns =
-        driving ||
-        me?.role === "owner" ||
-        !turns.driver ||
-        !store.state.presence.some((person) => person.id === turns.driver);
     const instructions = view.agent?.instructions;
     const memory = useMemory();
 
@@ -358,8 +363,7 @@ export function MenuSheet({ places = true, settingsOnly = false }) {
             ${
                 conversation &&
                 collab() &&
-                steer &&
-                (!turns?.on || canStopTurns) &&
+                canToggleTurns() &&
                 item(
                     turns?.on ? "Turn off take turns" : "Take turns",
                     () =>
@@ -497,7 +501,7 @@ export function MenuSheet({ places = true, settingsOnly = false }) {
                         "Open PiP to see its model",
                 )
             }
-            ${item("Appearance", () => openSheet({ type: "appearance" }), paletteOf().name)}
+            ${item("Appearance", () => openSheet({ type: "appearance" }), lookLabel())}
             ${!touch && item("Keyboard shortcuts", () => openSheet({ type: "shortcuts" }), "?")}
             ${
                 me?.role === "owner" &&
@@ -516,7 +520,7 @@ export function MenuSheet({ places = true, settingsOnly = false }) {
             ${item("Spend", () => openSheet({ type: "spend" }), me?.role === "owner" ? "by person and session, limits" : "yours")}
             ${triggersOn() && me?.role !== "viewer" && item("Webhooks and watches", () => openSheet({ type: "hooks" }), "GitHub, other services")}
             ${me?.role === "owner" && item("Providers", () => openSheet({ type: "providers" }))}
-            <${RefreshModels} />
+            ${modelRefreshAvailable() && item("Refresh models", refreshModels, store.state.modelRefresh.loading ? "refreshing…" : "models.json and providers")}
             ${extensionMenuItems().map((each) => item(each.label, each.run, each.hint))}
             ${item("Extensions", () => openSheet({ type: "extensions" }), extensionsHint())}
             ${

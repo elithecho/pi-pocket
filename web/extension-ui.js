@@ -13,11 +13,12 @@ import {
     useRef,
     useState,
 } from "preact/hooks";
-import { replaceAddress, useBack } from "./back.js";
+import { useBack } from "./back.js";
 import { describersChanged, setCallDescriber } from "./calls.js";
+import { leaveSafeMode, onSafeModeEnd, safeMode } from "./safe-mode.js";
 import { api, closeSheet, notify, onExtensionEvent, openSheet, store } from "./store.js";
 import { setCallSummary } from "./turns.js";
-import { html, Icon, iconPath, Loader, Markdown, Sheet, Spinner, Switch } from "./ui.js";
+import { html, Icon, iconPath, Loader, Markdown, railState, Sheet, Spinner, Switch } from "./ui.js";
 
 /**
  * The version of `pocket`. It goes up only when something extensions use changes in a way that breaks them; additions
@@ -266,65 +267,13 @@ function cleanUp(record, dispose) {
 
 // ─── Safe mode ───────────────────────────────────────────────────────────────
 
-/** Where a tab keeps that it is in safe mode: in its session storage, so reloads and reconnects keep it. */
-const SAFE_KEY = "pocket.noext";
-
-/** What `?noext=` turns safe mode off with; any other value (`1`, or none) turns it on. */
-const SAFE_OFF = new Set(["0", "false", "off", "no"]);
-
-/**
- * Read `?noext=1` (safe mode on) or `?noext=0` (off) from the address, keep it for the tab, and take it out of the
- * address, so a link copied from here does not pass it on.
- */
-function startSafeMode() {
-    const query = new URLSearchParams(location.search);
-    const asked = query.has("noext")
-        ? !SAFE_OFF.has(query.get("noext").trim().toLowerCase())
-        : null;
-    let on = false;
-
-    try {
-        if (asked === true) {
-            sessionStorage.setItem(SAFE_KEY, "1");
-        } else if (asked === false) {
-            sessionStorage.removeItem(SAFE_KEY);
-        }
-
-        on = sessionStorage.getItem(SAFE_KEY) === "1";
-    } catch {
-        // No session storage: safe mode holds for this page only.
-        on = asked === true;
-    }
-
-    if (query.has("noext")) {
-        query.delete("noext");
-        const rest = query.toString();
-
-        replaceAddress(`${location.pathname}${rest ? `?${rest}` : ""}${location.hash}`);
-    }
-
-    return on;
-}
-
-let safe = startSafeMode();
 /** Safe mode was told once in this page: a reconnect does not tell it again. */
 let safeTold = false;
 
-/** This tab loads no browser modules of extensions (it was opened with `?noext=1`). */
-export const safeMode = () => safe;
+export { leaveSafeMode, safeMode };
 
-/** Leave safe mode: the tab loads its browser modules again. */
-export function leaveSafeMode() {
-    safe = false;
-
-    try {
-        sessionStorage.removeItem(SAFE_KEY);
-    } catch {
-        // Nothing kept, nothing to take away.
-    }
-
-    follow(store.state);
-}
+// Leaving safe mode loads the browser modules again.
+onSafeModeEnd(() => follow(store.state));
 
 // ─── Loading ─────────────────────────────────────────────────────────────────
 
@@ -337,7 +286,7 @@ function follow(state) {
     const list = Array.isArray(listed) ? listed : [];
     // Signed in or not counts too: safe mode says so once someone is.
     const key = [
-        safe ? "safe" : "",
+        safeMode() ? "safe" : "",
         state.me ? "in" : "",
         ...list.map(
             (each) =>
@@ -369,16 +318,20 @@ export function onExtensionsGone(listener) {
 /** Load what the server lists, and unload what it no longer does or lists at a new address (a new version). */
 function sync(list) {
     order = list.map((each) => each.module);
-    const wanted = new Map(safe ? [] : list.map((each) => [each.module, each]));
+    const wanted = new Map(safeMode() ? [] : list.map((each) => [each.module, each]));
 
     for (const record of [...modules.values()]) {
         const entry = wanted.get(record.module);
+        const tools = Array.isArray(entry?.tools) ? entry.tools : null;
+        // A module reloaded on the server may install other tools, with the same browser module.
+        const retooled = tools !== null && String(tools) !== String(record.tools);
 
-        if (entry?.url !== record.url) {
+        // One that failed (describing a tool its server module did not have yet, say) gets another go.
+        if (entry?.url !== record.url || (retooled && record.dead)) {
             unload(record);
-        } else if (Array.isArray(entry.tools)) {
-            // A module reloaded on the server may install other tools, with the same browser module.
-            record.tools = entry.tools;
+        } else if (retooled) {
+            record.tools = tools;
+            describersChanged();
         }
     }
 
@@ -412,11 +365,11 @@ function sync(list) {
         }
     }
 
-    if (safe && !safeTold && store.state.me) {
+    if (safeMode() && !safeTold && store.state.me) {
         safeTold = true;
         notify(
             "warning",
-            "Extensions' browser parts are off in this tab. Menu → Extensions turns them back on.",
+            "Extensions' browser parts are off in this tab, and so is the theme. Menu → Extensions turns them back on.",
             () => openSheet({ type: "extensions" }),
         );
     }
@@ -923,13 +876,15 @@ function pocketFor(record) {
                 );
             }
 
-            const link = document.createElement("link");
+            // In the app's own layer (index.html), after its rules: it wins and loses against them by specificity and
+            // order, as a stylesheet of its own would, and the theme's layer stays above both. The address is the URL
+            // parser's, so it holds no quote or backslash to end the string early.
+            const sheet = document.createElement("style");
 
-            link.rel = "stylesheet";
-            link.href = href.href;
-            link.dataset.extension = record.module;
-            link.addEventListener("error", () => {
-                if (live() && link.isConnected) {
+            sheet.textContent = `@import url("${href.href.replace(/["\\\n]/g, encodeURIComponent)}") layer(pocket);`;
+            sheet.dataset.extension = record.module;
+            sheet.addEventListener("error", () => {
+                if (live() && sheet.isConnected) {
                     console.warn(`${record.title}: ${href.href} did not load`);
                     noticeFrom(
                         record,
@@ -938,8 +893,8 @@ function pocketFor(record) {
                     );
                 }
             });
-            document.head.append(link);
-            record.disposers.push(() => link.remove());
+            document.head.append(sheet);
+            record.disposers.push(() => sheet.remove());
         },
         /** Run `dispose` when this version goes: an edit, or the module turned off. Gone or failed already: now. */
         onDispose(dispose) {
@@ -1011,7 +966,12 @@ function describerOf(tool) {
     for (const module of order) {
         const record = modules.get(module);
 
-        if (liveRecord(record) && record.calls.has(tool)) {
+        // Only a tool its module still installs: one a newer version took away is no longer its own.
+        if (
+            liveRecord(record) &&
+            record.calls.has(tool) &&
+            (record.tools === null || record.tools.includes(tool))
+        ) {
             return { record, spec: record.calls.get(tool) };
         }
     }
@@ -1243,11 +1203,6 @@ function firstCharacters(text, count) {
     return characters;
 }
 
-/**
- * A rail button's badge as it shows: as the app's own counts, none at 0 and "99+" above 99 (Infinity too); NaN and
- * -Infinity show nothing, other numbers as they are; text, trimmed, with "" and "0" as nothing, and long text cut whole
- * characters at a time.
- */
 /** What each button's badge shows, worked out once for each version of the button: a draw that changes none reads it. */
 const shownBadges = new WeakMap();
 
@@ -1262,6 +1217,11 @@ function badgeFor(spec) {
     return shown;
 }
 
+/**
+ * A rail button's badge as it shows: as the app's own counts, none at 0 and "99+" above 99 (Infinity too); NaN and
+ * -Infinity show nothing, other numbers as they are; text, trimmed, with "" and "0" as nothing, and long text cut whole
+ * characters at a time.
+ */
 function badgeOf(badge) {
     if (typeof badge === "number") {
         if (Number.isNaN(badge) || badge === 0 || badge === -Infinity) {
@@ -1294,7 +1254,7 @@ export function browserModuleState(module) {
     const record = modules.get(module);
 
     if (record === undefined) {
-        return safe && order.includes(module) ? { status: "off", error: null } : undefined;
+        return safeMode() && order.includes(module) ? { status: "off", error: null } : undefined;
     }
 
     return { status: record.status, error: record.error };
@@ -1323,6 +1283,8 @@ export function ExtensionRailButtons() {
             return html`<button
                 key=${`${record.module}:${spec.id}`}
                 class=${`rail-button rail-ext ${open ? "open" : ""}`}
+                data-part="rail-button"
+                data-state=${railState(open)}
                 title=${spec.title}
                 aria-label=${badge === "" ? spec.title : `${spec.title}, ${badge}`}
                 aria-pressed=${spec.page === undefined ? undefined : open}
@@ -1679,6 +1641,7 @@ export function ExtensionPage() {
     // A page that keeps sideways swipes (`swipe: false`) starts no swipe back anywhere on it (`gestures.js`).
     return html`<section
         class="ext-page"
+        data-part="extension-page"
         aria-label=${title}
         data-module=${target?.module}
         data-no-swipe=${spec?.swipe === false ? "" : undefined}

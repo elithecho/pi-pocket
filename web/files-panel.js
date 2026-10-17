@@ -29,7 +29,7 @@ export function setFilesOpen(open, tab) {
     } else {
         sessionStorage.removeItem(OPEN_KEY);
 
-        if (document.documentElement.dataset.focus === "files-tile") {
+        if (document.documentElement.dataset.focus === "files-panel") {
             document.documentElement.dataset.focus = "pane";
         }
     }
@@ -659,6 +659,8 @@ export function FilesPanel({ leaving = false }) {
 
     return html`<section
         class=${`files-tile window ${leaving ? "leaving" : ""}`}
+        data-part="files-panel"
+        data-state=${leaving ? "closing" : undefined}
         role=${beside ? undefined : "dialog"}
         aria-modal=${beside ? undefined : "true"}
         aria-label="Files"

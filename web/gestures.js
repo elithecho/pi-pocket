@@ -69,7 +69,7 @@ export function useDragToClose(ref, { dir, onClose, enabled = true, scrim: scrim
             return undefined;
         }
 
-        const vertical = dir !== "left";
+        const vertical = dir === "down" || dir === "up";
         // PiP's sheet has a scrim beside it, not around it: dimming its parent would dim the whole app.
         const scrim = scrimRef?.current ?? element.parentElement;
         // Around the element (a sheet's overlay), the scrim's color fades, so the sheet in it stays solid; beside it
@@ -98,7 +98,9 @@ export function useDragToClose(ref, { dir, onClose, enabled = true, scrim: scrim
                     ? `translateY(${offset}px)`
                     : dir === "up"
                       ? `translateY(${-offset}px)`
-                      : `translateX(${-offset}px)`;
+                      : dir === "right"
+                        ? `translateX(${offset}px)`
+                        : `translateX(${-offset}px)`;
             dim(Math.min(1, offset / size()) * 0.8);
         };
 
@@ -156,7 +158,9 @@ export function useDragToClose(ref, { dir, onClose, enabled = true, scrim: scrim
                     ? touch.clientY - start.y
                     : dir === "up"
                       ? start.y - touch.clientY
-                      : start.x - touch.clientX;
+                      : dir === "right"
+                        ? touch.clientX - start.x
+                        : start.x - touch.clientX;
             const across = Math.abs(vertical ? touch.clientX - start.x : touch.clientY - start.y);
 
             if (!dragging) {

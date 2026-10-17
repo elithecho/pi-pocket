@@ -230,25 +230,9 @@ export async function conversationRoutes(
         return json(response, 200, await app.commands.watchPr(id, user, body.pr));
     }
 
-    // Memory normally applies here. The owner's pending queue reviews all projects, but never adds or edits.
+    // Memory normally applies here. The owner's pending queue reviews all projects, but never adds or edits: `Memory`
+    // checks who may use it, and what it may do with a lesson.
     const pendingMemory = third === "memory" && url.searchParams.get("pending") === "all";
-
-    if (pendingMemory) {
-        if (user.role !== "owner") {
-            throw new HttpError(403, "Only the owner can review all pending lessons.");
-        }
-
-        if (app.sessionMeta(app.rootOf(id))?.pip !== user.id) {
-            throw new HttpError(403, "Review all pending lessons from your private PiP.");
-        }
-
-        if (
-            method === "POST" &&
-            (fourth === undefined || (parts[4] !== "approve" && parts[4] !== "discard"))
-        ) {
-            throw new HttpError(400, "The pending queue only approves or discards lessons.");
-        }
-    }
 
     if (third === "memory" && fourth === undefined) {
         if (method === "GET") {
@@ -256,6 +240,11 @@ export async function conversationRoutes(
         }
 
         if (method === "POST") {
+            // Saving takes no queue: it would save a lesson as usual.
+            if (pendingMemory) {
+                throw new HttpError(400, "The pending queue only approves or discards lessons.");
+            }
+
             return json(
                 response,
                 200,

@@ -30,14 +30,7 @@ import {
     togglePeeks,
 } from "./peeks.js";
 import { closePip, openPip, PipHost, pipAvailable, togglePip } from "./pip.js";
-import {
-    Drawer,
-    RailNav,
-    ResizeHandle,
-    SessionList,
-    toSessions,
-    workspaceOrder,
-} from "./sessions.js";
+import { Drawer, RailNav, ResizeHandle, SessionList, toSessions } from "./sessions.js";
 // Loaded for what it does: it gives replies' Markdown the component for pages, images, and diffs in code blocks.
 import "./rich.js";
 import { takeShare } from "./share.js";
@@ -61,6 +54,7 @@ import {
     scoped,
     start,
     store,
+    workspaceOrder,
 } from "./store.js";
 import { prefs, setPrefs, startTheme } from "./theme.js";
 import { Transcript } from "./transcript.js";
@@ -129,7 +123,7 @@ function Topbar() {
     // How far down it reaches: PiP's window on a short wide screen stops below its buttons.
     const edge = useEdge("--topbar-h", (rect) => rect.bottom);
 
-    return html`<header class="topbar" ref=${edge}>
+    return html`<header class="topbar" data-part="topbar" ref=${edge}>
         <button
             class="icon-button badge-host topbar-back"
             aria-label=${waiting > 0 ? `Back to sessions, ${waiting} waiting for you` : "Back to sessions"}
@@ -147,8 +141,8 @@ function Topbar() {
                 disabled=${!conversation}
                 onClick=${() => openSheet({ type: "menu" })}
             ></button>
-            <span class="title-main" aria-hidden="true">${title}</span>
-            <span class="title-sub">
+            <span class="title-main" data-part="topbar-title" aria-hidden="true">${title}</span>
+            <span class="title-sub" data-part="topbar-sub">
                 ${
                     folder &&
                     html`<span
@@ -251,6 +245,7 @@ function Notice({ notice, leaving }) {
     return html`<button
         ref=${ref}
         class=${`notice ${notice.level} ${notice.action ? "acts" : ""} ${held ? "held" : ""} ${leaving ? "leaving" : ""}`}
+        data-part="notice"
         style=${`--life:${notice.life ?? 4500}ms`}
         onPointerEnter=${() => setPointed(true)}
         onPointerLeave=${() => setPointed(false)}
@@ -299,7 +294,7 @@ function Notices() {
         return null;
     }
 
-    return html`<div class="notices" role="status" aria-live="polite">
+    return html`<div class="notices" data-part="notices" role="status" aria-live="polite">
         ${all.map(
             (notice) =>
                 html`<${Notice}
@@ -449,15 +444,16 @@ function App() {
 
     return html`<div
         class=${`layout ${inConversation || placed ? "" : "home"} ${browsing ? "browsing" : ""} ${filing ? "filing" : ""}`}
+        data-part="app"
     >
-        <aside class="sidebar window">
+        <aside class="sidebar window" data-part="sidebar">
             <div class="sidebar-clip">
                 <${RailNav} foldable=${true} folded=${rail} />
                 ${!rail && html`<${SessionList} />`}
             </div>
             ${!rail && html`<${ResizeHandle} />`}
         </aside>
-        <div class=${`pane window ${placed ? "boarded" : ""}`}>
+        <div class=${`pane window ${placed ? "boarded" : ""}`} data-part="pane">
             ${
                 board
                     ? html`<${SubagentsBoard} />`
@@ -477,7 +473,7 @@ function App() {
                         !state.missing &&
                         html`<${Composer} key=${state.conversationId} />`
                     }`
-                        : html`<div class="home-list">
+                        : html`<div class="home-list" data-part="home-list">
                           <${RailNav} />
                           <${SessionList} />
                       </div>
@@ -521,9 +517,10 @@ function focusWindow(event) {
         return;
     }
 
+    // By the window's part name, as themes know it: `sidebar`, `peeks`, `people-panel`, `browser-panel`, `files-panel`.
     const name =
-        ["sidebar", "browser", "files-tile", "people", "peeks"].find((each) =>
-            win.classList.contains(each),
+        ["sidebar", "peeks", "people-panel", "browser-panel", "files-panel"].find((each) =>
+            win.matches(`[data-part~="${each}"]`),
         ) ?? "pane";
 
     if (document.documentElement.dataset.focus !== name) {
@@ -531,6 +528,8 @@ function focusWindow(event) {
     }
 }
 
+// The conversation's window has the focus until another takes it: `data-focus` always names one, for themes too.
+document.documentElement.dataset.focus ??= "pane";
 document.addEventListener("pointerover", focusWindow, true);
 document.addEventListener("pointerdown", focusWindow, true);
 document.addEventListener("focusin", focusWindow, true);
@@ -762,10 +761,10 @@ const ESCAPE_TWICE_MS = 1500;
 
 /** Esc twice stops Pi, as Esc does in other agents' terminals. Twice, since Esc also closes things and leaves fields. */
 function stopOnSecondEscape() {
-    const { view, sheet, launcher, board, page } = store.state;
+    const { view, sheet, launcher, board, page, drawer } = store.state;
 
     // Esc closes these first.
-    if (sheet || launcher || board || page || !view.live?.busy || !canSteer()) {
+    if (sheet || launcher || board || page || drawer || !view.live?.busy || !canSteer()) {
         return;
     }
 
@@ -779,7 +778,10 @@ function stopOnSecondEscape() {
     }
 
     escapedAt = Date.now();
-    escapeNotice = notify("info", "Press Esc again to stop Pi.");
+    const notice = (escapeNotice = notify("info", "Press Esc again to stop Pi."));
+
+    // Up only while a second press stops Pi.
+    setTimeout(() => dismiss(notice), ESCAPE_TWICE_MS);
 }
 
 const altUp = () => delete document.documentElement.dataset.alt;

@@ -55,7 +55,7 @@ function crumbsOf(path, home) {
 }
 
 /** Recent folders' labels: each one's name, with its parent's where two have the same name. */
-function recentLabels(paths, home) {
+export function recentLabels(paths, home) {
     const names = paths.map((path) => nameOf(path, home));
 
     return paths.map((path, index) =>
@@ -144,6 +144,8 @@ export function CwdSheet({ mode }) {
     const [naming, setNaming] = useState(false);
     const [editing, setEditing] = useState(null);
     const [missing, setMissing] = useState(null);
+    // Why a favorite in `missing` does not open, when it is there but is no folder to open (a link to nothing, a file).
+    const [missingWhy, setMissingWhy] = useState(null);
     const [busy, setBusy] = useState(false);
     // Set at once, unlike busy: a second shortcut in the same moment does not start a second session.
     const starting = useRef(false);
@@ -182,8 +184,10 @@ export function CwdSheet({ mode }) {
                     return;
                 }
 
-                if (notThere(error, path)) {
+                // A favorite that does not open, however, gets the banner, which can remove it.
+                if (notThere(error, path) || store.state.folderFavorites.includes(path)) {
                     setMissing(path);
+                    setMissingWhy(notThere(error, path) ? null : error.message);
                     setEditing(null);
                 } else if (listing) {
                     notify("error", error.message);
@@ -272,17 +276,25 @@ export function CwdSheet({ mode }) {
     const mayStar = canSteer() && !scoped();
     const starred = target !== null && favorites.includes(target);
 
-    /** Star or unstar the folder Open takes. The list changes when the server says it did, on every device. */
-    const toggleFavorite = () =>
+    /** Star or unstar a folder. The list changes when the server says it did, on every device. */
+    const setFavorite = (path, on) =>
         attempt(async () => {
             setSaving(true);
 
             try {
-                await api("folder-favorites", { path: target, starred: !starred });
+                await api("folder-favorites", { path, starred: on });
+
+                return true;
             } finally {
                 setSaving(false);
             }
         });
+
+    const toggleFavorite = () => {
+        setFavorite(target, !starred);
+        // The list keeps the keys: the star, off while it saves, would drop the focus to the page.
+        list.current?.focus({ preventScroll: true });
+    };
 
     // Ctrl/⌘+1…9 starts a session in a favorite, while this is the New session picker on top. Caught before the
     // app's own keys; Alt+1…9 (sessions) has Alt, so it never gets here.
@@ -565,9 +577,31 @@ export function CwdSheet({ mode }) {
         ${
             missing !== null &&
             html`<div class="folder-missing">
-                <span><span class="mono">${shortPath(missing, home)}</span> isn't there.</span>
+                <span>
+                    ${missingWhy ?? html`<span class="mono">${shortPath(missing, home)}</span> isn't there.`}
+                </span>
                 <span class="fp-missing-actions">
-                    <button class="button small" onClick=${() => make(missing)}>Create it</button>
+                    ${
+                        missingWhy === null &&
+                        html`<button class="button small" onClick=${() => make(missing)}>
+                            Create it
+                        </button>`
+                    }
+                    ${
+                        // A favorite that is gone is unstarred here: the star acts only on a folder that opens.
+                        mayStar &&
+                        favorites.includes(missing) &&
+                        html`<button
+                            class="button small"
+                            disabled=${saving}
+                            onClick=${() =>
+                                setFavorite(missing, false).then(
+                                    (done) => done && setMissing(null),
+                                )}
+                        >
+                            Remove from favorites
+                        </button>`
+                    }
                     <button
                         class="icon-button"
                         aria-label="Never mind"
@@ -639,7 +673,17 @@ export function CwdSheet({ mode }) {
                         aria-selected=${dir.path === selected ? "true" : "false"}
                         data-path=${dir.path}
                         title=${touch ? undefined : "Double-click to open"}
-                        onClick=${() => (touch ? load(dir.path) : setSelected(dir.path))}
+                        onClick=${() => {
+                            if (touch) {
+                                load(dir.path);
+
+                                return;
+                            }
+
+                            // The list keeps the keys: a click gives the row the focus, which the list's keys ignore.
+                            setSelected(dir.path);
+                            list.current?.focus({ preventScroll: true });
+                        }}
                         onDblClick=${() => !touch && load(dir.path)}
                     >
                         <${Icon} name="folder" size=${16} />

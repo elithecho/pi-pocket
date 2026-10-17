@@ -41,6 +41,10 @@ stdenv.mkDerivation {
       ../web
       ../test
       ../docs
+      # The reference check in `npm run check`; the rest of the docs site stays out.
+      ../docs-site/check-reference.mjs
+      ../docs-site/src/reference-check.mjs
+      ../types
       ../package.json
       ../package-lock.json
       ../tsconfig.json
@@ -93,7 +97,7 @@ stdenv.mkDerivation {
     # node refuses to strip typescript under node_modules; keep the app outside it
     app="$out/share/pi-pocket"
     mkdir -p "$app" "$out/bin"
-    cp -r bin src web docs node_modules package.json README.md AGENTS.md SECURITY.md LICENSE "$app/"
+    cp -r bin src web docs types node_modules package.json README.md AGENTS.md SECURITY.md LICENSE "$app/"
     # npm's hidden lock contains build-time tarball paths, not runtime dependencies
     rm -f "$app/node_modules/.package-lock.json"
 

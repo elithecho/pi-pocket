@@ -210,6 +210,7 @@ stopWatching = (() => {
     const stops = [watchTree(join(APP_ROOT, "web"), (file) => opened.reloadClients(file))];
 
     opened.loader.watch();
+    opened.themes.watch();
 
     return () => {
         for (const each of stops) {

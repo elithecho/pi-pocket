@@ -2,16 +2,12 @@
  * What extension modules add to the app over HTTP: `/api/x/:module/…`, the routes a module registered (after the API's
  * sign-in, and with the `X-Pocket` header on every method), and `/x/:module/:rev/…`, the files of its browser module.
  */
-import { closeSync, constants, fstatSync, openSync, readFileSync, readlinkSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { PocketApp } from "../app.ts";
 import type { User } from "../config.ts";
 import { describe, HttpError } from "../errors.ts";
 import { exposedError, MAX_FILE_BYTES } from "../extension-web.ts";
-import { type ApiRequest, json, readJson, send } from "./io.ts";
-
-/** Opened on its own, an SVG could run script with the app's origin: give it an opaque one. */
-const SVG_CSP = "sandbox; default-src 'none'; style-src 'unsafe-inline'";
+import { type ApiRequest, json, readChecked, readJson, send, SVG_CSP } from "./io.ts";
 
 /** A request to a module's route: `parts` is the path after `/api/x/`. */
 export async function extensionRoute(
@@ -130,33 +126,6 @@ function failed(response: ServerResponse, error: unknown, file: string, user: Us
     });
 }
 
-/**
- * Whether `fd`, with these `stats`, is the file that was checked: the same file (device and inode) as the check saw, and,
- * where the system says where an open file is (Linux), at the path checked. A folder on the way swapped for a link
- * between the check and the open leads to another file, which fails the first test everywhere. `proc` is for tests.
- */
-export function opened(
-    fd: number,
-    checked: { file: string; dev: number; ino: number },
-    stats: { dev: number; ino: number },
-    proc = true,
-): boolean {
-    if (stats.dev !== checked.dev || stats.ino !== checked.ino) {
-        return false;
-    }
-
-    if (!proc) {
-        return true;
-    }
-
-    try {
-        return readlinkSync(`/proc/self/fd/${fd}`) === checked.file;
-    } catch {
-        // No /proc here (macOS): the same file as checked is the test.
-        return true;
-    }
-}
-
 /** A file of a module's browser module: `parts` is the path after `/x/`, its version first and then the file's path. */
 export function extensionFile(
     app: PocketApp,
@@ -183,38 +152,12 @@ export function extensionFile(
         throw new HttpError(404, "Not found");
     }
 
-    let body: Buffer;
-    let fd: number;
-
-    // Opened as it is checked: a regular file, not a link, and never waiting (a pipe swapped in after the check would
-    // otherwise hold the whole server).
-    try {
-        fd = openSync(found.file, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
-    } catch {
-        throw new HttpError(404, "Not found");
-    }
-
-    try {
-        const stats = fstatSync(fd);
-
-        // The very file that was checked: a folder on its way swapped for a link after the check would lead elsewhere.
-        if (!stats.isFile() || !opened(fd, found, stats)) {
-            throw new HttpError(404, "Not found");
-        }
-
-        if (stats.size > MAX_FILE_BYTES) {
-            throw new HttpError(
-                413,
-                `A browser module's file is at most ${MAX_FILE_BYTES / 1024 / 1024} MB`,
-            );
-        }
-
-        body = readFileSync(fd);
-    } catch (error) {
-        throw error instanceof HttpError ? error : new HttpError(404, "Not found");
-    } finally {
-        closeSync(fd);
-    }
+    // The very file that was checked: a folder on its way swapped for a link after the check would lead elsewhere.
+    const body = readChecked(
+        found,
+        MAX_FILE_BYTES,
+        `A browser module's file is at most ${MAX_FILE_BYTES / 1024 / 1024} MB`,
+    );
 
     // The address holds the version, but a restart starts the versions again: always ask.
     // Another site's page may not use it, not even as a script: the sign-in cookie would go along with the request.

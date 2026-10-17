@@ -44,6 +44,10 @@ export type Changes = {
 
 const MAX_FILES = 500;
 const MAX_DIFF = 300_000;
+/** Untracked files are counted again on every look, so a larger one keeps its count unknown. */
+const MAX_COUNTED_BYTES = 2_000_000;
+/** How many untracked files are counted at once. */
+const COUNTS_AT_ONCE = 8;
 const GIT_TIMEOUT_MS = 15_000;
 
 /** Git for Changes: quick, with room for a long diff. */
@@ -302,14 +306,14 @@ export async function changesIn(
             ? new Map()
             : parseNumstat(await git(root, ["diff", "HEAD", "--numstat", "-z", ...DIFF_FLAGS]));
 
-    // HEAD diffs omit untracked files. Count only the visible, permitted files, one at a time; Git keeps binary,
-    // attributes, symlinks and final-newline handling the same as each file's diff. No index or files are changed.
-    for (const { code, path } of status) {
-        if (code !== "??" && head !== undefined) {
-            continue;
-        }
-
+    // HEAD diffs omit untracked files. Count only the visible, permitted files; Git keeps binary, attributes,
+    // symlinks and final-newline handling the same as each file's diff. No index or files are changed.
+    const count = async (path: string) => {
         try {
+            if ((await lstat(join(root, path))).size > MAX_COUNTED_BYTES) {
+                return;
+            }
+
             const added = parseNumstat(
                 await git(
                     root,
@@ -326,7 +330,18 @@ export async function changesIn(
         } catch {
             // A file can disappear or become unreadable after status. Keep the list, with its count unknown.
         }
-    }
+    };
+
+    const uncounted = status.filter(({ code }) => code === "??" || head === undefined);
+    let next = 0;
+
+    await Promise.all(
+        Array.from({ length: COUNTS_AT_ONCE }, async () => {
+            while (next < uncounted.length) {
+                await count(uncounted[next++]!.path);
+            }
+        }),
+    );
 
     const versions = await Promise.all(status.map(({ path }) => versionOf(join(root, path))));
     const files = status.map(({ code, path }, index): ChangedFile => {

@@ -3,7 +3,7 @@
  * `<details>` block, so it reads well on GitHub or in any Markdown viewer. Pi's thinking is left out.
  */
 import type { ClientBlock, ClientEntry } from "./projection.ts";
-import { ATTACHMENTS_HEADING, FROM_PREFIX } from "./entry-format.ts";
+import { FROM_PREFIX, splitAttachments } from "./entry-format.ts";
 
 /** Tool output beyond this keeps its start and end. */
 const MAX_OUTPUT = 4000;
@@ -97,7 +97,7 @@ function userMarkdown(
     entry: Extract<ClientEntry, { kind: "user" }>,
     author: string | undefined,
 ): string {
-    const [written = "", files] = entry.text.split(ATTACHMENTS_HEADING);
+    const [written, files] = splitAttachments(entry.text);
     const body = written.replace(FROM_PREFIX, "").trim();
     const names = (files ?? "")
         .split("\n")

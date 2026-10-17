@@ -11,7 +11,6 @@ import { api, attempt, isRow, navigate, notify, openSheet, store, uid } from "./
 import { memoryAvailable, useMemory } from "./sheets/memory.js";
 import { itemsOf, says, summarize } from "./turns.js";
 import {
-    ATTACHMENTS_HEADING,
     contextLevel,
     entryImageUrl,
     fileUrl,
@@ -21,11 +20,12 @@ import {
     Icon,
     Markdown,
     modelLabel,
+    railState,
     readable,
     Spinner,
+    splitAttachments,
     Thumb,
     usePresence,
-    writtenText,
 } from "./ui.js";
 import { MicButton, useDictation } from "./voice.js";
 
@@ -394,11 +394,12 @@ function Report({ text, label = "Report", data = null, conversationId }) {
     </div>`;
 }
 
-/** Uploaded names can contain commas or parentheses: find the name repeated at the end of its saved path. */
-function attachedFiles(text) {
-    const block = text.split(ATTACHMENTS_HEADING).at(-1);
-
-    if (!text.includes(ATTACHMENTS_HEADING)) {
+/**
+ * A message's list of attached files (`splitAttachments`). Uploaded names can contain commas or parentheses: find the
+ * name repeated at the end of its saved path.
+ */
+function attachedFiles(block) {
+    if (block === undefined) {
         return [];
     }
 
@@ -426,24 +427,23 @@ function Item({ item, last, busy, conversationId }) {
         const entry = item.entry;
 
         if (entry.kind === "user") {
+            // Reports, posts, and scheduled messages whole: what came from outside may hold anything, an attachment
+            // heading too, and is read only as the plain data it is.
             const body = written(entry.text);
-            // The server trims image/file-only messages, including the attachment heading's leading newlines.
-            const stored = body.startsWith(ATTACHMENTS_HEADING.trimStart()) ? `\n\n${body}` : body;
-            const text = writtenText({ text: stored });
 
-            if (text.startsWith(REPORT)) {
+            if (body.startsWith(REPORT)) {
                 return html`<${Report}
-                    text=${text.slice(REPORT.length)}
+                    text=${body.slice(REPORT.length)}
                     conversationId=${conversationId}
                 />`;
             }
 
-            const hook = WEBHOOK.exec(text);
-            const watched = hook ? null : REPO_WATCH.exec(text);
+            const hook = WEBHOOK.exec(body);
+            const watched = hook ? null : REPO_WATCH.exec(body);
             const outside = hook ?? watched;
 
             if (outside) {
-                const posted = post(text.slice(outside[0].length));
+                const posted = post(body.slice(outside[0].length));
 
                 return html`<${Report}
                     label=${`${watched ? "GitHub" : "Webhook"}: ${outside[1]}`}
@@ -453,15 +453,16 @@ function Item({ item, last, busy, conversationId }) {
                 />`;
             }
 
-            if (text.startsWith(SCHEDULED)) {
+            if (body.startsWith(SCHEDULED)) {
                 return html`<div class="pip-event">
                     <${Icon} name="pulse" size=${13} />
-                    <span>${text.slice(SCHEDULED.length)}</span>
+                    <span>${body.slice(SCHEDULED.length)}</span>
                 </div>`;
             }
 
+            const [text, block] = splitAttachments(body);
             // Uploaded pictures also remain readable when the chosen model cannot take inline images.
-            const files = attachedFiles(stored);
+            const files = attachedFiles(block);
             const pictures = files.filter((file) => file.mime.startsWith("image/"));
             const others = files.filter((file) => !pictures.includes(file));
 
@@ -918,6 +919,8 @@ function PipPanel({ leaving, scrim }) {
 
     return html`<section
         class=${`pip-panel ${leaving ? "leaving" : ""}`}
+        data-part="pip"
+        data-state=${leaving ? "closing" : undefined}
         ref=${ref}
         role="dialog"
         aria-modal=${NARROW.matches ? "true" : undefined}
@@ -1120,6 +1123,8 @@ export function PipRailButton() {
 
     return html`<button
         class=${`rail-button rail-pip ${pip?.busy ? "lit" : ""} ${pipOpen ? "open" : ""}`}
+        data-part="rail-button"
+        data-state=${railState(pipOpen, Boolean(pip?.busy))}
         title="PiP, your assistant (Alt+A)"
         aria-label=${["PiP", pip?.busy && "working", unread && "something new"].filter(Boolean).join(", ")}
         aria-pressed=${pipOpen}

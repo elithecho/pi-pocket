@@ -1,7 +1,9 @@
 /**
  * The extension gallery's index, read strictly: everything in it comes from elsewhere. An index is one JSON file (the
  * index repository's generated `index.json`): its format, and an entry for each extension, which names the files of
- * one drop-in at a pinned commit of a GitHub repository, with each file's SHA-256, and what the module installs.
+ * one drop-in at a pinned commit of a GitHub repository, with each file's SHA-256, and what the module installs. An
+ * entry with `kind: "theme"` names a theme folder's files the same way, and declares nothing: a Pi Pocket before
+ * 0.14.0 reads it as not valid (it has a field that one does not know), so never installs it as an extension.
  *
  * Pi Pocket reads it here, and the index repository's checks use these same functions, so an entry they let in is one
  * Pi Pocket reads (they import this file from a Pi Pocket checkout, the loader's lists of reserved names with it). Text
@@ -12,6 +14,12 @@ import { createHash } from "node:crypto";
 import { BUILT_IN_COMMANDS } from "../extension-web.ts";
 import { INVISIBLE_CLASS } from "../fence.ts";
 import { BUILT_IN_MODULES, BUILT_IN_TOOLS, RESERVED_EXTENSIONS } from "../reload.ts";
+import { assetType, THEME_API, THEME_ID, THEME_LIMITS } from "../themes/format.ts";
+import { reservedThemeIds } from "../themes/reserved.ts";
+import { atLeast, POCKET_VERSION, versionParts } from "../versions.ts";
+
+// Where they always were: the index repository's checks import them from here.
+export { atLeast, versionParts };
 
 /** The index format this Pi Pocket reads. */
 export const INDEX_FORMAT = 1;
@@ -89,11 +97,35 @@ export interface Entry {
     revoked: { commit: string; reason: string }[];
 }
 
+/**
+ * A theme's entry (`kind: "theme"`): a theme folder (`themes/format.ts`) at a pinned commit, installed into the data
+ * folder's `themes/<name>/`. It runs no code, so it declares nothing.
+ */
+export interface ThemeEntry {
+    kind: "theme";
+    /** The theme's id: its folder's name, which its files are in (`<name>/theme.css`). */
+    name: string;
+    title: string;
+    description: string;
+    tags: string[];
+    author: { name: string; github?: string };
+    version: string;
+    source: { repo: string; commit: string; path: string };
+    files: EntryFile[];
+    /** The theme surface's version it needs (`THEME_API`). */
+    themeApi: number;
+    minPocket: string;
+    revoked: { commit: string; reason: string }[];
+}
+
 export interface Index {
     name?: string;
     /** The index's repository on GitHub, where entries are submitted. */
     repo?: string;
+    /** The extensions' entries. */
     entries: Entry[];
+    /** The themes' entries. */
+    themes: ThemeEntry[];
     /** Entries for a newer Pi Pocket, or a newer extension API. */
     incompatible: number;
     /** Entries that are not valid, or repeat a name, with why. */
@@ -109,6 +141,9 @@ export interface Index {
 
 /** Why something in the index is not valid. */
 export class EntryError extends Error {}
+
+/** The kinds of entry this Pi Pocket reads: an entry with no `kind` is an extension's. Others are for a newer one. */
+const KINDS = ["extension", "theme"];
 
 // ─── Names ─────────────────────────────────────────────────────────────────────────
 
@@ -128,7 +163,6 @@ const NOT_PORTABLE =
     /^(con|prn|aux|nul|com[0-9\u00b9\u00b2\u00b3]|lpt[0-9\u00b9\u00b2\u00b3])(\..*)?$|\.$/i;
 const TAG = /^[a-z0-9][a-z0-9-]{0,23}$/;
 const VERSION = /^[0-9A-Za-z][0-9A-Za-z.+-]{0,31}$/;
-const POCKET_VERSION = /^(\d{1,4})\.(\d{1,4})\.(\d{1,4})$/;
 const TOOL = /^[A-Za-z0-9_-]{1,64}$/;
 const KEY = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$/;
 const HOOK = /^[A-Za-z][A-Za-z0-9]{0,63}$/;
@@ -141,6 +175,7 @@ const COMMAND = /^(conversation|global) [a-z][a-z0-9_]*-[a-z0-9_-]*$/;
  * `INVISIBLE_CLASS`, which keeps them out of memory lessons too): none of them belong in what the gallery draws.
  */
 const UNSAFE = new RegExp(`[\\p{Zl}\\p{Zp}${INVISIBLE_CLASS}]`, "u");
+const UNSAFE_ALL = new RegExp(UNSAFE.source, "gu");
 
 /**
  * Why a file name is not one an extension called `extension` may have, or undefined when it may: its module
@@ -183,6 +218,52 @@ export function fileProblem(file: string, extension: string): string | undefined
 
     return undefined;
 }
+
+/**
+ * Why a file name is not one a theme called `theme` may have, or undefined when it may: in its own folder (`<theme>/…`,
+ * at most four folders deep), and one the theme format serves: `theme.json`, `colors.toml`, and `colors-light.toml` at
+ * its top, stylesheets, `.woff2` fonts, and images. So a theme's files never reach past its folder in `themes/`.
+ */
+export function themeFileProblem(file: string, theme: string): string | undefined {
+    if (typeof file !== "string" || file.length > 200) {
+        return "is not a file name of 200 characters at most";
+    }
+
+    const parts = file.split("/");
+
+    if (parts[0] !== theme || parts.length < 2) {
+        return `is not in the folder ${theme}/`;
+    }
+
+    if (parts.length > THEME_LIMITS.depth + 2) {
+        return `is more than ${THEME_LIMITS.depth} folders deep`;
+    }
+
+    for (const part of parts.slice(1)) {
+        if (!PART.test(part) || part === "node_modules") {
+            return `has the part ${JSON.stringify(part)}: use letters, digits, . _ and -, not starting with a dot`;
+        }
+
+        if (NOT_PORTABLE.test(part)) {
+            return `has the part ${JSON.stringify(part)}, which Windows reads as another name`;
+        }
+    }
+
+    const inner = parts.slice(1).join("/");
+
+    if (
+        SMALL_FILES.includes(inner) ||
+        inner.toLowerCase().endsWith(".css") ||
+        assetType(inner) !== undefined
+    ) {
+        return undefined;
+    }
+
+    return "is not a file a theme serves: theme.json, colors.toml, colors-light.toml, .css, .woff2, or an image (.png, .jpg, .webp, .avif, .gif, .svg)";
+}
+
+/** The files at the top of a theme's folder that say what it is: each is `THEME_LIMITS.small` at most. */
+const SMALL_FILES = ["theme.json", "colors.toml", "colors-light.toml"];
 
 // ─── Reading ───────────────────────────────────────────────────────────────────────
 
@@ -265,31 +346,6 @@ function access(value: unknown, where: string): Access {
     return value as Access;
 }
 
-/** The parts of a Pi Pocket version, `0.14.0`, or undefined. Pre-releases count as their release (`0.14.0-beta.3`). */
-export function versionParts(version: string): [number, number, number] | undefined {
-    const match = POCKET_VERSION.exec(version.replace(/[-+].*$/, ""));
-
-    return match === null ? undefined : [Number(match[1]), Number(match[2]), Number(match[3])];
-}
-
-/** Whether Pi Pocket `version` is `minimum` or newer. */
-export function atLeast(version: string, minimum: string): boolean {
-    const have = versionParts(version);
-    const need = versionParts(minimum);
-
-    if (have === undefined || need === undefined) {
-        return false;
-    }
-
-    for (let at = 0; at < 3; at++) {
-        if (have[at] !== need[at]) {
-            return have[at]! > need[at]!;
-        }
-    }
-
-    return true;
-}
-
 function declares(value: unknown, where: string): Declares {
     const shape = object(
         value,
@@ -363,32 +419,8 @@ function declares(value: unknown, where: string): Declares {
     return result;
 }
 
-/** One entry of the index, checked whole: throws an `EntryError` that says what is wrong, and where. */
-export function parseEntry(value: unknown): Entry {
-    const shape = object(
-        value,
-        "the entry",
-        [
-            "name",
-            "title",
-            "description",
-            "tags",
-            "author",
-            "version",
-            "source",
-            "files",
-            "pocketApi",
-            "minPocket",
-            "declares",
-        ],
-        ["revoked"],
-    );
-    const name = text(shape.name, "name", 64, NAME);
-
-    if (BUILT_IN_MODULES.has(name) || name.startsWith("pocket-")) {
-        throw new EntryError(`name ${name} is Pi Pocket's own: give it a name of its own`);
-    }
-
+/** What every kind of entry has besides its name and files: who made it, which version, and where its files are. */
+function common(shape: Shape) {
     const author = object(shape.author, "author", ["name"], ["github"]);
     const source = object(shape.source, "source", ["repo", "commit"], ["path"]);
     const repo = text(source.repo, "source.repo", 140);
@@ -409,10 +441,34 @@ export function parseEntry(value: unknown): Entry {
         throw new EntryError("source.path is not a folder in the repository, four deep at most");
     }
 
-    const files = list(shape.files, "files", LIMITS.files, (item, at) => {
+    return {
+        title: text(shape.title, "title", 60),
+        description: text(shape.description, "description", 600),
+        tags: list(shape.tags, "tags", 10, (item, at) => text(item, at, 24, TAG)),
+        author: {
+            name: text(author.name, "author.name", 60),
+            ...(author.github === undefined
+                ? {}
+                : { github: text(author.github, "author.github", 39, OWNER) }),
+        },
+        version: text(shape.version, "version", 32, VERSION),
+        source: { repo, commit: text(source.commit, "source.commit", 40, COMMIT), path },
+        minPocket: text(shape.minPocket, "minPocket", 14, POCKET_VERSION),
+        revoked: revocations(shape.revoked),
+    };
+}
+
+/** An entry's files: each name as `problemOf` allows, each size up to `size`, and no two that are one file on disk. */
+function filesOf(
+    value: unknown,
+    max: number,
+    size: number,
+    problemOf: (file: string) => string | undefined,
+): EntryFile[] {
+    const files = list(value, "files", max, (item, at) => {
         const file = object(item, at, ["name", "sha256", "size"]);
         const fileName = text(file.name, `${at}.name`, 200);
-        const problem = fileProblem(fileName, name);
+        const problem = problemOf(fileName);
 
         if (problem !== undefined) {
             throw new EntryError(`${at}.name ${problem}`);
@@ -421,9 +477,9 @@ export function parseEntry(value: unknown): Entry {
         if (
             !Number.isSafeInteger(file.size) ||
             (file.size as number) < 0 ||
-            (file.size as number) > LIMITS.file
+            (file.size as number) > size
         ) {
-            throw new EntryError(`${at}.size is not a size of ${LIMITS.file} bytes at most`);
+            throw new EntryError(`${at}.size is not a size of ${size} bytes at most`);
         }
 
         return {
@@ -432,10 +488,6 @@ export function parseEntry(value: unknown): Entry {
             size: file.size as number,
         };
     });
-
-    if (!files.some((file) => file.name === `${name}.ts`)) {
-        throw new EntryError(`files has no ${name}.ts, the module`);
-    }
 
     // Two names that differ only in case are one file where the file system ignores case (macOS, Windows).
     const folded = new Set(files.map((file) => file.name.toLowerCase()));
@@ -457,6 +509,49 @@ export function parseEntry(value: unknown): Entry {
         }
     }
 
+    return files;
+}
+
+/** One entry of the index, checked whole: throws an `EntryError` that says what is wrong, and where. */
+export function parseEntry(value: unknown): Entry {
+    const shape = object(
+        value,
+        "the entry",
+        [
+            "name",
+            "title",
+            "description",
+            "tags",
+            "author",
+            "version",
+            "source",
+            "files",
+            "pocketApi",
+            "minPocket",
+            "declares",
+        ],
+        ["revoked", "kind"],
+    );
+
+    if (shape.kind !== undefined && shape.kind !== "extension") {
+        throw new EntryError(`kind is ${JSON.stringify(shape.kind)}, not an extension's`);
+    }
+
+    const name = text(shape.name, "name", 64, NAME);
+
+    if (BUILT_IN_MODULES.has(name) || name.startsWith("pocket-")) {
+        throw new EntryError(`name ${name} is Pi Pocket's own: give it a name of its own`);
+    }
+
+    const about = common(shape);
+    const files = filesOf(shape.files, LIMITS.files, LIMITS.file, (file) =>
+        fileProblem(file, name),
+    );
+
+    if (!files.some((file) => file.name === `${name}.ts`)) {
+        throw new EntryError(`files has no ${name}.ts, the module`);
+    }
+
     if (files.reduce((sum, file) => sum + file.size, 0) > LIMITS.total) {
         throw new EntryError(`files are more than ${LIMITS.total} bytes together`);
     }
@@ -465,27 +560,108 @@ export function parseEntry(value: unknown): Entry {
         throw new EntryError("pocketApi is not a version of the extension API, such as 1");
     }
 
-    const entry: Entry = {
+    const { minPocket, revoked, ...rest } = about;
+
+    return {
         name,
-        title: text(shape.title, "title", 60),
-        description: text(shape.description, "description", 600),
-        tags: list(shape.tags, "tags", 10, (item, at) => text(item, at, 24, TAG)),
-        author: {
-            name: text(author.name, "author.name", 60),
-            ...(author.github === undefined
-                ? {}
-                : { github: text(author.github, "author.github", 39, OWNER) }),
-        },
-        version: text(shape.version, "version", 32, VERSION),
-        source: { repo, commit: text(source.commit, "source.commit", 40, COMMIT), path },
+        ...rest,
         files,
         pocketApi: shape.pocketApi as number,
-        minPocket: text(shape.minPocket, "minPocket", 14, POCKET_VERSION),
+        minPocket,
         declares: declares(shape.declares, "declares"),
-        revoked: revocations(shape.revoked),
+        revoked,
     };
+}
 
-    return entry;
+/**
+ * Ids a theme in the index may not have, as Pi Pocket keeps them for itself (`reservedThemeIds`): `pocket`, `desktop`
+ * (the desktop's colors), the themes that come with it (`web/themes/`), and its palettes (`web/themes.js`). Read from
+ * this checkout, as the index's checks import this file from one.
+ */
+export const RESERVED_THEMES: ReadonlySet<string> = await reservedThemeIds();
+
+/**
+ * A theme's entry, checked whole: its files keep to the theme format's names and limits (`themes/format.ts`). What
+ * its CSS does is checked when it is installed, before it is in place (`readTheme`), as for any theme folder.
+ */
+export function parseThemeEntry(value: unknown): ThemeEntry {
+    const shape = object(
+        value,
+        "the entry",
+        [
+            "kind",
+            "name",
+            "title",
+            "description",
+            "tags",
+            "author",
+            "version",
+            "source",
+            "files",
+            "themeApi",
+            "minPocket",
+        ],
+        ["revoked"],
+    );
+
+    if (shape.kind !== "theme") {
+        throw new EntryError('kind is not "theme"');
+    }
+
+    const name = text(shape.name, "name", 48, THEME_ID);
+
+    if (RESERVED_THEMES.has(name)) {
+        throw new EntryError(`name ${name} is Pi Pocket's own: give it a name of its own`);
+    }
+
+    const about = common(shape);
+    const files = filesOf(shape.files, THEME_LIMITS.files, THEME_LIMITS.asset, (file) =>
+        themeFileProblem(file, name),
+    );
+    const inner = (file: EntryFile) => file.name.slice(name.length + 1);
+    const has = (path: string) => files.some((file) => inner(file) === path);
+
+    if (!has("theme.css") && !has("colors.toml") && !has("colors-light.toml")) {
+        throw new EntryError(
+            `files has no ${name}/theme.css, ${name}/colors.toml, or ${name}/colors-light.toml`,
+        );
+    }
+
+    if (has("theme.css") && !has("theme.json")) {
+        throw new EntryError(`files has ${name}/theme.css but no ${name}/theme.json`);
+    }
+
+    for (const file of files) {
+        if (SMALL_FILES.includes(inner(file)) && file.size > THEME_LIMITS.small) {
+            throw new EntryError(`${file.name} is more than ${THEME_LIMITS.small} bytes`);
+        }
+    }
+
+    const css = files.filter((file) => file.name.toLowerCase().endsWith(".css"));
+
+    if (css.reduce((sum, file) => sum + file.size, 0) > THEME_LIMITS.css) {
+        throw new EntryError(`its CSS files are more than ${THEME_LIMITS.css} bytes together`);
+    }
+
+    if (files.reduce((sum, file) => sum + file.size, 0) > THEME_LIMITS.total) {
+        throw new EntryError(`files are more than ${THEME_LIMITS.total} bytes together`);
+    }
+
+    if (!Number.isSafeInteger(shape.themeApi) || (shape.themeApi as number) < 1) {
+        throw new EntryError("themeApi is not a version of the theme surface, such as 1");
+    }
+
+    const { minPocket, revoked, ...rest } = about;
+
+    return {
+        kind: "theme",
+        name,
+        ...rest,
+        files,
+        themeApi: shape.themeApi as number,
+        minPocket,
+        revoked,
+    };
 }
 
 /** An entry's revoked commits, each with why: none when it has no `revoked`. */
@@ -503,15 +679,43 @@ function revocations(value: unknown): Entry["revoked"] {
 }
 
 /**
+ * An entry's revoked commits for the warning alone, read loosely: a revocation counts whatever else its entry says, so
+ * an item the strict reading refuses (a reason with an emoji's variation selector, or too long) must not drop them
+ * all. Each item with a commit counts; its reason is cleaned of what a line may not hold, and cut short.
+ */
+function revokedLoosely(value: unknown): Entry["revoked"] {
+    return (Array.isArray(value) ? value.slice(0, 200) : []).flatMap((item: unknown) => {
+        const { commit, reason } = (item ?? {}) as { commit?: unknown; reason?: unknown };
+
+        if (typeof commit !== "string" || !COMMIT.test(commit)) {
+            return [];
+        }
+
+        const said =
+            typeof reason === "string"
+                ? reason.replace(UNSAFE_ALL, " ").replace(/\s+/g, " ").trim().slice(0, 300)
+                : "";
+
+        return [{ commit, reason: said === "" ? "The index gives no reason." : said }];
+    });
+}
+
+/**
  * What the owner approves when they install or update: a digest of everything that decides what is written and what
  * it does (its repository, folder, commit, files with their hashes, and what it declares). The index could change any
  * of them and keep the commit; an install or update the owner saw goes ahead only while this is the same.
  */
-export function pinOf(entry: Entry): string {
-    const { name, source, files, declares } = entry;
+export function pinOf(entry: Entry | ThemeEntry): string {
+    const { name, source, files } = entry;
 
     return createHash("sha256")
-        .update(JSON.stringify({ name, source, files, declares }))
+        .update(
+            JSON.stringify(
+                "kind" in entry
+                    ? { kind: entry.kind, name, source, files }
+                    : { name, source, files, declares: entry.declares },
+            ),
+        )
         .digest("hex");
 }
 
@@ -524,11 +728,19 @@ export function compatibility(
     value: unknown,
     here: { api: number; version: string },
 ): "ok" | "newer" {
-    const { pocketApi, minPocket } = (
+    const { pocketApi, minPocket, kind, themeApi } = (
         typeof value === "object" && value !== null ? value : {}
     ) as Shape;
 
+    if (typeof kind === "string" && !KINDS.includes(kind)) {
+        return "newer";
+    }
+
     if (typeof pocketApi === "number" && pocketApi > here.api) {
+        return "newer";
+    }
+
+    if (typeof themeApi === "number" && themeApi > THEME_API) {
         return "newer";
     }
 
@@ -574,6 +786,7 @@ export function parseIndex(source: string, here: { api: number; version: string 
 
     const index: Index = {
         entries: [],
+        themes: [],
         incompatible: 0,
         invalid: [],
         revoked: new Map(),
@@ -606,11 +819,7 @@ export function parseIndex(source: string, here: { api: number; version: string 
         }
 
         if (name !== undefined && !twice) {
-            try {
-                index.revoked.set(name, revocations((item as Shape).revoked));
-            } catch {
-                // Said below, when the entry is read whole.
-            }
+            index.revoked.set(name, revokedLoosely((item as Shape).revoked));
         }
 
         if (compatibility(item, here) === "newer" && !twice) {
@@ -628,7 +837,11 @@ export function parseIndex(source: string, here: { api: number; version: string 
                 throw new EntryError(`a second entry is named ${name}`);
             }
 
-            index.entries.push(parseEntry(item));
+            if ((item as Shape | null)?.kind === "theme") {
+                index.themes.push(parseThemeEntry(item));
+            } else {
+                index.entries.push(parseEntry(item));
+            }
         } catch (error) {
             if (!(error instanceof EntryError)) {
                 throw error;
@@ -699,8 +912,15 @@ export function sha256(bytes: Uint8Array): string {
     return createHash("sha256").update(bytes).digest("hex");
 }
 
-/** Every name an entry declares, for checking two entries do not share one: its module's, extensions', and tools'. */
-export function claimedNames(entry: Entry): string[] {
+/**
+ * Every name an entry declares, for checking two entries do not share one: its module's, extensions', and tools'; a
+ * theme's id.
+ */
+export function claimedNames(entry: Entry | ThemeEntry): string[] {
+    if ("kind" in entry) {
+        return [`theme ${entry.name}`];
+    }
+
     return [
         `module ${entry.name}`,
         ...entry.declares.extensions.map((name) => `extension ${name}`),

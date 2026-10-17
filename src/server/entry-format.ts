@@ -14,6 +14,17 @@ export const FROM_PREFIX = /^\[from: ([^\]\n]{1,60})\] /;
 /** What separates a message from the list of files attached to it. The web app splits messages on it too. */
 export const ATTACHMENTS_HEADING = "\n\nAttached files (saved on the server):\n";
 
+/**
+ * A message shown to people (its speaker taken off) in two: what they wrote, and the list of attached files if any. One
+ * of files alone sent before 0.14.0 has the heading without the blank line before it.
+ */
+export function splitAttachments(text: string): [written: string, files: string | undefined] {
+    const whole = text.startsWith(ATTACHMENTS_HEADING.trimStart()) ? `\n\n${text}` : text;
+    const [written = "", files] = whole.split(ATTACHMENTS_HEADING);
+
+    return [written, files];
+}
+
 /** The entry kind of a command someone ran. */
 export const SHELL_ENTRY = "pocket.shell";
 

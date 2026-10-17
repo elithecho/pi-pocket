@@ -224,6 +224,7 @@ function Bar({ agents, active, open, held }) {
 
     return html`<div
         class=${`agents-bar ${open ? "open" : ""} ${working.length > 0 ? "busy" : ""}`}
+        data-part="subagents-bar"
         ref=${box}
     >
         <div class="agents-top">

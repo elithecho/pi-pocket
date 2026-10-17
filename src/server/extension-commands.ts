@@ -31,9 +31,9 @@ const TASK = COMMAND_TASK;
 const MAX_ARGS = 4000;
 
 /** How much of a card is kept: its end, as a `!` command keeps the end of what it printed. */
-export const MAX_CARD = 30_000;
+const MAX_CARD = 30_000;
 /** How much of a notice is kept. */
-export const MAX_TOAST = 500;
+const MAX_TOAST = 500;
 /** How many runs one person may have going at once, over every session. */
 const MAX_RUNNING = 4;
 /** How many request ids of finished runs a person keeps in a conversation. A run that still goes keeps its id. */

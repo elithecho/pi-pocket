@@ -1,5 +1,5 @@
 // What a message's menu does: copy, fork from here, and send again (with this model or another).
-import { useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import {
     actions,
     attempt,
@@ -66,11 +66,26 @@ const openBranch = (run) => {
     });
 };
 
+/**
+ * A field that shows in a sheet already open takes the keys, where a keyboard is at hand: the sheet focused its field
+ * marked autofocus only when it opened.
+ */
+function useFocus(ref, shown) {
+    useEffect(() => {
+        if (shown && !matchMedia("(pointer: coarse)").matches) {
+            ref.current?.focus({ preventScroll: true });
+        }
+    }, [shown]);
+}
+
 /** Send a message to Pi again in a fork: with this session's model, or another one. */
 function SendAgain({ prompt, worktree }) {
     const { models, view } = store.state;
     const [choosing, setChoosing] = useState(false);
     const [query, setQuery] = useState("");
+    const search = useRef(null);
+
+    useFocus(search, choosing);
     const current = view.agent?.model;
     const needle = query.trim().toLowerCase();
     const others = models.filter(
@@ -88,7 +103,7 @@ function SendAgain({ prompt, worktree }) {
                 <label class="search">
                     <${Icon} name="search" size=${16} />
                     <input
-                        autofocus
+                        ref=${search}
                         placeholder="Search models"
                         value=${query}
                         onInput=${(event) => setQuery(event.currentTarget.value)}
@@ -119,6 +134,9 @@ export function MessageSheet({ entryId }) {
         view.entries.get(entryId) ?? store.state.history?.find((each) => each.id === entryId);
     const [draft, setDraft] = useState(null);
     const [worktree, setWorktree] = useState(false);
+    const field = useRef(null);
+
+    useFocus(field, draft !== null);
 
     if (entry?.kind !== "user" && entry?.kind !== "assistant") {
         return html`<${Sheet} title="Message" onClose=${closeSheet}>
@@ -131,6 +149,8 @@ export function MessageSheet({ entryId }) {
     // A message to Pi (from anyone), or one of its replies.
     const toPi = entry.kind === "user";
     const text = toPi ? writtenText(entry) : replyText(entry);
+    // A message of files alone has no words: its preview says so, and there is nothing to copy or remember.
+    const filesAlone = toPi && text.trim() === "";
     const prompt = toPi ? entry : promptBefore(entryId);
 
     const copy = () => {
@@ -147,8 +167,8 @@ export function MessageSheet({ entryId }) {
                 Pi gets the edited message in a new session that forks just before the original. The original stays as it is.
             </p>
             <textarea
+                ref=${field}
                 rows="6"
-                autofocus
                 value=${draft}
                 onInput=${(event) => setDraft(event.currentTarget.value)}
             ></textarea>
@@ -165,7 +185,7 @@ export function MessageSheet({ entryId }) {
     }
 
     return html`<${Sheet} title=${toPi ? "Message" : "Reply"} onClose=${closeSheet}>
-        <div class="message-preview">${text}</div>
+        <div class="message-preview">${filesAlone ? "(attachments)" : text}</div>
         ${
             canBranch &&
             view.conversation.inRepository &&
@@ -187,13 +207,14 @@ export function MessageSheet({ entryId }) {
             ${
                 memoryAvailable() &&
                 canSteer() &&
+                !filesAlone &&
                 item(
                     "Remember…",
                     () => openSheet({ type: "memory", draft: lessonFrom(text) }),
                     "keep it as a lesson for Pi",
                 )
             }
-            ${item("Copy text", copy)}
+            ${!filesAlone && item("Copy text", copy)}
         </div>
     <//>`;
 }

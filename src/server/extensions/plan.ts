@@ -16,6 +16,7 @@ import {
 } from "@earendil-works/pi-durable";
 import { PlanDoc } from "../docs.ts";
 import type { PocketHost } from "../host.ts";
+import { BUILT_IN_TOOLS } from "../reload.ts";
 
 const PLANNING = `Plan mode is on. Read and explore, then propose a plan; change nothing yet. You can use read, artifact, the browser to look at pages (not to click, type, or run scripts in them), and bash for simple read-only commands such as ls, cat, grep, find, and git status/log/diff/show, without redirects, globs, variables, or command substitution, and tools marked read-only. Writing, editing, other commands, and subagents are blocked until a person approves the plan. End your answer with the plan as a short numbered list.`;
 
@@ -130,7 +131,8 @@ const READERS: Readonly<Record<string, ArgsCheck>> = {
     pwd: anyArgs,
     readlink: anyArgs,
     realpath: anyArgs,
-    rg: refuses("", "--pre"),
+    // A hostname program runs to fill in hyperlinks.
+    rg: refuses("", "--pre", "--hostname-bin"),
     sha1sum: anyArgs,
     sha256sum: anyArgs,
     // A compress program runs when sort spills to temporary files.
@@ -325,10 +327,11 @@ export default function createPlan(_host: PocketHost) {
                     const tool = (await runtime.agent?.(context))?.tools.find(
                         (tool) => tool.name === call.name,
                     ) as { annotations?: ToolAnnotations } | undefined;
+                    // A built-in tool's hint can only come from a wrap, which the owner never sees as read-only.
                     const reason = blockedInPlanMode(
                         call.name,
                         call.arguments as Record<string, unknown>,
-                        tool?.annotations?.readOnlyHint === true,
+                        !BUILT_IN_TOOLS.has(call.name) && tool?.annotations?.readOnlyHint === true,
                     );
 
                     return reason === undefined ? undefined : { block: reason };

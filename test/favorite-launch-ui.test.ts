@@ -248,7 +248,7 @@ test("command palette offers each favorite as a direct New Session action", real
         "favorite saved",
     );
     const name = work.split("/").pop();
-    const label = `New Session: ${name}`;
+    const label = `New session in ${name}`;
 
     await page.evaluate(`
         const { store, closeSheet } = await import('/store.js');

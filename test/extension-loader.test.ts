@@ -24,7 +24,7 @@ shared.cleaned = {};
 let folders = 0;
 
 /** A loader on fresh folders, with every drop-in on. */
-function setUp(loadLimitMs?: number) {
+function setUp(loadLimitMs?: number, changed?: () => void) {
     const directory = join(root, `loader-${++folders}`);
     const builtIn = join(directory, "built-in");
     const dropIn = join(directory, "drop-ins");
@@ -38,7 +38,7 @@ function setUp(loadLimitMs?: number) {
         notice: (level: string, message: string) =>
             notices.push({ to: "everyone", level, message }),
     } as unknown as PocketHost;
-    const webs = new ExtensionWebs();
+    const webs = new ExtensionWebs(changed === undefined ? {} : { changed });
     const loader = new ExtensionLoader(registry, host, { builtIn, dropIn }, () => true, {
         webs,
         notify: (level, message) => notices.push({ to: "owner", level, message }),
@@ -151,4 +151,23 @@ export default async (_host, web) => {
     open();
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.equal(answer(webs, "stuck"), undefined);
+});
+
+test("a new version with other tools tells the tabs, though its browser module stayed the same", async () => {
+    let told = 0;
+    const { dropIn, loader } = setUp(undefined, () => told++);
+    const module = (tool: string) => `/** Tooled. */
+export default (_host, web) => {
+	web.client("tooled.js", { access: "view" });
+	return { name: "t-tooled", tools: [{ name: "${tool}", description: "", parameters: { type: "object" }, execute: () => {} }] };
+};
+`;
+
+    writeFileSync(join(dropIn, "tooled.js"), "export default () => {};\n");
+    writeFileSync(join(dropIn, "tooled.ts"), module("tooled_a"));
+    await loader.reload("tooled.ts");
+    // Its browser module may now describe the new tool's calls, and no longer the old one's.
+    writeFileSync(join(dropIn, "tooled.ts"), module("tooled_b"));
+    await loader.reload("tooled.ts");
+    assert.equal(told, 2);
 });

@@ -218,6 +218,10 @@ test(
             realpathSync(join(extensions, "node_modules")),
             realpathSync(join(packageDir, "share/pi-pocket/node_modules")),
         );
+        assert.equal(
+            realpathSync(join(extensions, "_pocket.d.ts")),
+            realpathSync(join(packageDir, "share/pi-pocket/types/pocket.d.ts")),
+        );
         assert.equal((await module()).enabled, false);
         assert.deepEqual((await module()).extensions, []);
         assert.equal(

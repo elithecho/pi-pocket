@@ -37,7 +37,7 @@ import { WorktreeSheet } from "./sheets/worktree.js";
 import { TrustSheet } from "./trust.js";
 import { addLayer, goBack, removeLayer } from "./back.js";
 import { actions, api, signOut, store } from "./store.js";
-import { Boundary, html, Icon, SheetBack, usePresence } from "./ui.js";
+import { Boundary, html, Icon, SheetBack, SheetInfo, usePresence } from "./ui.js";
 
 // ─── Back ─────────────────────────────────────────────────────────────────────────
 
@@ -160,7 +160,9 @@ export function Sheets() {
 
     return html`<div class=${`sheet-host ${leaving ? "leaving" : ""}`} inert=${leaving}>
         <${SheetBack.Provider} value=${trail.length > 1 ? goBack : null}>
-            <${Boundary} key=${key} reset=${sheet}>${sheetBody(sheet)}<//>
+            <${SheetInfo.Provider} value=${{ type: sheet.type, closing: Boolean(leaving) }}>
+                <${Boundary} key=${key} reset=${sheet}>${sheetBody(sheet)}<//>
+            <//>
         <//>
     </div>
     ${auth}`;
@@ -220,7 +222,11 @@ function sheetBody(sheet) {
             break;
         case "gallery-share":
             body = galleryAvailable()
-                ? html`<${GalleryShareSheet} key=${sheet.id} file=${sheet.id} />`
+                ? html`<${GalleryShareSheet}
+                      key=${sheet.id}
+                      file=${sheet.id}
+                      theme=${sheet.theme === true}
+                  />`
                 : null;
             break;
         // A sheet an extension's browser module added (`extension-ui.js`).

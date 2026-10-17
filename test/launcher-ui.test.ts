@@ -266,3 +266,30 @@ test(
         await settle();
     },
 );
+
+// Last: it starts a session, and home() counts them. PR #92 by @elithecho.
+test(
+    "a favorite folder shows while the launcher is open and starts a session there",
+    real,
+    async () => {
+        const folder = join(work, "project-1");
+
+        await home();
+        await open();
+        await search("> project-1");
+        await page.evaluate(
+            `(await import('/store.js')).api('folder-favorites', { path: ${JSON.stringify(folder)}, starred: true })`,
+        );
+        await see(
+            `return JSON.stringify(!!document.querySelector('.launcher-item.on')?.textContent.includes('project-1'))`,
+            "the favorite's action",
+        );
+        await page.press("Enter");
+        await see(
+            `const { store } = await import('/store.js');
+
+        return JSON.stringify(store.state.view.agent?.cwd === ${JSON.stringify(folder)} && !store.state.sheet);`,
+            "a session in the favorite, without the folder picker",
+        );
+    },
+);

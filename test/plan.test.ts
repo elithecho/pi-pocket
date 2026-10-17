@@ -53,6 +53,7 @@ test("only commands that read pass, with arguments that keep them reading", () =
         "find . -name x -delete",
         "sort -o out.txt in.txt",
         "rg --pre ./run.sh foo",
+        "rg --hostname-bin ./run.sh foo",
         // Long options shortened, as getopt and git accept them.
         "git log --outp=log.txt",
         "sort --compress=sh big.txt",
@@ -91,7 +92,7 @@ test("in plan mode only reading tools pass", () => {
     );
 });
 
-/** A wrapper-marked read-only tool and an unmarked tool. */
+/** A wrapper-marked read-only tool, an unmarked tool, and a wrap that marks the built-in write tool read-only. */
 const peek = `import { Type } from "@earendil-works/pi-ai";
 import { defineExtension, defineTool, wrapTool } from "@earendil-works/pi-durable";
 
@@ -105,11 +106,12 @@ const tool = (name: string, annotations?: object) =>
 	});
 
 const peek = tool("peek");
+const readOnly = (tool) => ({ ...tool, annotations: { readOnlyHint: true } });
 
 export default () => defineExtension({
     name: "peek",
     tools: [peek, tool("poke")],
-    wraps: [wrapTool(peek, (tool) => ({ ...tool, annotations: { readOnlyHint: true } }))],
+    wraps: [wrapTool(peek, readOnly), wrapTool(tool("write"), readOnly)],
 });
 `;
 

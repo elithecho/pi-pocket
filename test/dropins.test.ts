@@ -14,7 +14,7 @@ import {
     until,
 } from "./helpers.ts";
 import assert from "node:assert/strict";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
 import type { FauxResponseStep } from "@earendil-works/pi-ai";
@@ -101,6 +101,38 @@ test("drop-ins are off until the owner turns them on, and cannot replace a built
     assert.equal(seen.dropIns, undefined);
     assert.equal(seen.modules.find((each) => each.file === "shout.ts")?.path, undefined);
     assert.equal((await app.extensions(owner(app))).dropIns, dropIns);
+    // Pi Pocket's types beside the drop-ins: a link to them, never a module.
+    assert.equal(
+        realpathSync(join(dropIns, "_pocket.d.ts")),
+        realpathSync(new URL("../types/pocket.d.ts", import.meta.url)),
+    );
+    assert.deepEqual(module("_pocket.d.ts"), []);
+});
+
+test("_pocket.d.ts: a link the owner pointed elsewhere stays, and only Pi Pocket's own copy is refreshed", async () => {
+    const { linkTypes } = await import("../src/server/reload.ts");
+    const types = realpathSync(new URL("../types/pocket.d.ts", import.meta.url));
+    const folder = join(root, "types-link");
+    const elsewhere = join(root, "their-pocket.d.ts");
+    const link = join(folder, "_pocket.d.ts");
+
+    mkdirSync(folder, { recursive: true });
+    writeFileSync(elsewhere, "export {};\n");
+    symlinkSync(elsewhere, link, "file");
+    linkTypes(folder, types);
+    assert.equal(realpathSync(link), realpathSync(elsewhere));
+
+    // Where links cannot be made, Pi Pocket keeps a copy: a stale one is refreshed, a file of the owner's is not.
+    rmSync(link);
+    const mark =
+        "// A copy of Pi Pocket's types/pocket.d.ts: Pi Pocket refreshes it at each start. Edits here are lost.\n";
+
+    writeFileSync(link, `${mark}export type Old = 1;\n`);
+    linkTypes(folder, types);
+    assert.equal(readFileSync(link, "utf8"), mark + readFileSync(types, "utf8"));
+    writeFileSync(link, "export type Mine = 1;\n");
+    linkTypes(folder, types);
+    assert.equal(readFileSync(link, "utf8"), "export type Mine = 1;\n");
 });
 
 test("a drop-in that is on gives Pi its tools and hooks, reloads when edited, and goes away when deleted", async () => {

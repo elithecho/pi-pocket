@@ -4,8 +4,8 @@
  */
 import { Type } from "@earendil-works/pi-ai";
 import { defineDoc, defineExtension, defineTool } from "@earendil-works/pi-durable";
-// A type import is gone when the module runs: copied elsewhere, only the type checker misses this path.
-import type { ExtensionWeb } from "../../src/server/host.ts";
+// A type import is gone when the module runs. In the drop-in folder, import the types from "./_pocket.d.ts".
+import type { Web } from "../../types/pocket.d.ts";
 
 /** Each session's time zone, as /clock-zone set it. A document kind is stored data: named after the module. */
 const ClockSettings = defineDoc<{ zone?: string }>({
@@ -61,7 +61,7 @@ function known(zone: string): boolean {
     }
 }
 
-export default function createClock(_host: unknown, web: ExtensionWeb) {
+export default function createClock(_host: unknown, web: Web) {
     // `/clock-zone` shows the session's time zone, and `/clock-zone Europe/Berlin` sets it, without asking Pi.
     web.command("clock-zone", {
         description: "Show or set this session's time zone for the clock",

@@ -27,9 +27,9 @@ const MAX_BEHIND_BYTES = 128 * 1024 * 1024;
 
 /**
  * How often a stream sends a comment, which keeps proxies from closing it, and checks that its tab keeps up; and how long
- * a polling session lives after its last poll or answer, when no poll comes. Tests set them.
+ * a polling session lives after its last poll or answer, when no poll comes.
  */
-export const eventTiming = { pingMs: 15_000, pollExpireMs: 60_000 };
+const eventTiming = { pingMs: 15_000, pollExpireMs: 60_000 };
 
 /** One browser tab that receives events by long polling instead of an event stream. */
 interface Poller {

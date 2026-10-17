@@ -244,6 +244,25 @@ export function workspaceOrder(state = store.state) {
 export const collab = () => (store.state.server?.collab ?? 0) >= 2;
 /** Viewers read and chat; they never steer Pi. */
 export const canSteer = () => store.state.me?.role !== "viewer";
+
+/**
+ * Whether this person may turn take turns on or off here, as the server decides: anyone who steers while it is off; the
+ * driver, the owner, or anyone when nobody drives or the driver has left, while it is on.
+ */
+export function canToggleTurns() {
+    const { me, presence, view } = store.state;
+    const turns = view.turns;
+
+    return (
+        canSteer() &&
+        (!turns?.on ||
+            turns.driver === me?.id ||
+            me?.role === "owner" ||
+            !turns.driver ||
+            !presence.some((person) => person.id === turns.driver))
+    );
+}
+
 /** People invited to one session cannot start sessions or invite others. */
 export const scoped = () => Array.isArray(store.state.me?.sessions);
 
@@ -549,6 +568,8 @@ const handlers = {
             models: data.models,
             guard: data.guard,
             server: data.server,
+            // Every theme folder (`theme.js`): an older server lists none.
+            themeList: Array.isArray(data.themes) ? data.themes : [],
             // This connection's id, which peek lists name (`peeks.js`). `GET /api/me` answers without one.
             ...(data.connection === undefined ? {} : { streamId: data.connection }),
         }),
@@ -561,6 +582,8 @@ const handlers = {
     "folder-favorites": (folderFavorites) =>
         store.set({ folderFavorites, folderFavoritesReady: true }),
     models: (models) => store.set({ models }),
+    // A theme folder came, went, or changed (`theme.js` loads its new version).
+    themes: (themeList) => store.set({ themeList }),
     // Every subagent in every session, while this tab shows the subagents board (`subagents-board.js`).
     subagents: (agents) => store.state.board && store.set({ boardAgents: agents }),
     view: applyView,
@@ -982,6 +1005,7 @@ export async function start() {
             models: hello.models,
             guard: hello.guard,
             server: hello.server,
+            themeList: Array.isArray(hello.themes) ? hello.themes : [],
         });
         connect();
     } catch (error) {
@@ -1235,7 +1259,7 @@ export function closePeople() {
     sessionStorage.removeItem(PEOPLE_KEY);
 
     // Its active border goes to the conversation, not nowhere.
-    if (document.documentElement.dataset.focus === "people") {
+    if (document.documentElement.dataset.focus === "people-panel") {
         document.documentElement.dataset.focus = "pane";
     }
 

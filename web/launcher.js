@@ -10,8 +10,9 @@ import { filesAvailable, toggleFiles } from "./files-panel.js";
 import { togglePeeks } from "./peeks.js";
 import { modelRefreshAvailable, refreshModels } from "./model-refresh.js";
 import { openPip, pipAvailable } from "./pip.js";
-import { setArchived, workspaceOrder } from "./sessions.js";
+import { setArchived } from "./sessions.js";
 import { branchAvailable, headLabel } from "./sheets/branch.js";
+import { recentLabels } from "./sheets/folder.js";
 import { galleryAvailable } from "./sheets/gallery.js";
 import { piSessionsAvailable } from "./sheets/pi-sessions.js";
 import {
@@ -25,18 +26,22 @@ import {
     scoped,
     signOut,
     store,
+    workspaceOrder,
 } from "./store.js";
 import {
+    BASE_LOOK,
+    chooseLook,
+    folderPaletteIds,
+    lookIds,
     paletteOf,
     prefs,
     preview,
     setPrefs,
-    THEMES,
     themeIds,
     themeVars,
     varsStyle,
 } from "./theme.js";
-import { APPLE, copyText, html, Icon, Keys, Marked, shortPath, timeAgo } from "./ui.js";
+import { APPLE, copyText, html, Icon, Keys, Marked, scrimPress, shortPath, timeAgo } from "./ui.js";
 
 /** How far a letter that does not begin a word may be from the one before it, in a match that is not contiguous. */
 const MAX_GAP = 3;
@@ -100,6 +105,8 @@ function actionItems() {
     const session = conversation?.kind === "session";
     const steer = canSteer();
     const canStart = steer && !scoped();
+    // As the folder picker names them: folders of one name get their parent's too.
+    const favoriteNames = recentLabels(folderFavorites, server?.home);
     const wide = matchMedia("(min-width: 960px)").matches;
     const list = [
         canStart && {
@@ -108,20 +115,6 @@ function actionItems() {
             keys: "Alt N",
             run: () => openSheet({ type: "cwd", mode: "new" }),
         },
-        ...(canStart
-            ? folderFavorites.map((path) => ({
-                  key: `action:new-favorite:${path}`,
-                  label: `New Session: ${path === server?.home ? "~" : path.replace(/\/+$/, "").split("/").pop() || "/"}`,
-                  detail: shortPath(path, server?.home),
-                  icon: "star",
-                  run: () =>
-                      attempt(async () => {
-                          const created = await actions.createSession(path);
-
-                          navigate(created.id);
-                      }),
-              }))
-            : []),
         piSessionsAvailable() && {
             label: "Continue a Pi session",
             detail: "from Pi in the terminal",
@@ -142,7 +135,7 @@ function actionItems() {
         },
         {
             label: "Appearance",
-            detail: "theme, tiling, motion, text size, thinking, reply speed",
+            detail: "theme, colors, tiling, motion, text size, thinking, reply speed",
             icon: "palette",
             run: () => openSheet({ type: "appearance" }),
         },
@@ -161,7 +154,7 @@ function actionItems() {
         },
         {
             label: prefs().showThinking ? "Hide thinking" : "Show thinking",
-            detail: "a chevron before the live spinner opens Pi's thinking",
+            detail: "Pi's thoughts above the live line and in the conversation",
             icon: "sparkle",
             keys: "Alt T",
             run: () => setPrefs({ showThinking: !prefs().showThinking }),
@@ -327,6 +320,21 @@ function actionItems() {
         { label: "Sign out", detail: "this browser", icon: "logout", run: signOut },
         // What extensions' browser modules added (`extension-ui.js`).
         ...extensionLauncherItems(),
+        // Last: a list that is cut keeps the actions above, however many favorites there are (up to 100).
+        ...(canStart
+            ? folderFavorites.map((path, index) => ({
+                  key: `action:new-favorite:${path}`,
+                  label: `New session in ${favoriteNames[index]}`,
+                  detail: shortPath(path, server?.home),
+                  icon: "star",
+                  run: () =>
+                      attempt(async () => {
+                          const created = await actions.createSession(path);
+
+                          navigate(created.id);
+                      }),
+              }))
+            : []),
     ];
 
     return list.filter(Boolean).map((item) => ({
@@ -369,29 +377,54 @@ function sessionItems() {
     });
 }
 
+/** Theme folders that change the look, as launcher items: no preview (their stylesheets load when chosen). */
+function lookItems() {
+    const vars = themeVars(paletteOf());
+
+    return lookIds()
+        .map(
+            (id) =>
+                store.state.themeList?.find((each) => each.id === id && each.usable) ??
+                (id === BASE_LOOK ? { id, name: "Pocket", builtIn: true } : null),
+        )
+        .filter(Boolean)
+        .map((look) => ({
+            kind: "theme",
+            key: `look:${look.id}`,
+            label: look.name,
+            detail: look.builtIn ? "theme, built in" : "theme",
+            text: `theme ${look.name} ${look.id}`,
+            look: look.id,
+            vars,
+        }));
+}
+
 function themeItems() {
     const desktop = store.state.desktopTheme;
-    const ids = [...(desktop ? ["desktop"] : []), ...themeIds()];
+    const ids = [...(desktop ? ["desktop"] : []), ...themeIds(), ...folderPaletteIds()];
 
-    return ids.map((id) => {
-        const palette = paletteOf(id);
-        const name = id === "desktop" ? `Desktop · ${palette.name}` : THEMES[id].name;
+    return [
+        ...lookItems(),
+        ...ids.map((id) => {
+            const palette = paletteOf(id);
+            const name = id === "desktop" ? `Desktop · ${palette.name}` : palette.name;
 
-        return {
-            kind: "theme",
-            key: `theme:${id}`,
-            label: name,
-            detail:
-                id === "desktop"
-                    ? "follows your Omarchy theme"
-                    : palette.colors.mode === "light"
-                      ? "light"
-                      : "dark",
-            text: `theme ${name} ${id}`,
-            theme: id,
-            vars: themeVars(palette),
-        };
-    });
+            return {
+                kind: "theme",
+                key: `theme:${id}`,
+                label: name,
+                detail:
+                    id === "desktop"
+                        ? "follows your Omarchy theme"
+                        : palette.colors.mode === "light"
+                          ? "light"
+                          : "dark",
+                text: `theme ${name} ${id}`,
+                theme: id,
+                vars: themeVars(palette),
+            };
+        }),
+    ];
 }
 
 const GROUP_NAMES = { session: "Sessions", action: "Actions", theme: "Themes" };
@@ -546,6 +579,7 @@ export function Launcher({ leaving, returnTo }) {
         store.state.appearance,
         store.state.me,
         store.state.server,
+        store.state.folderFavorites,
         store.state.extensionsRev,
     ]);
 
@@ -684,7 +718,7 @@ export function Launcher({ leaving, returnTo }) {
             return;
         }
 
-        preview(selected?.kind === "theme" ? selected.theme : null);
+        preview(selected?.kind === "theme" && selected.theme ? selected.theme : null);
     }, [selected?.key, leaving]);
     useLayoutEffect(() => {
         if (!leaving) {
@@ -730,6 +764,12 @@ export function Launcher({ leaving, returnTo }) {
 
         if (item.kind === "theme") {
             preview(null);
+
+            if (item.look) {
+                chooseLook(item.look, event);
+
+                return;
+            }
 
             if (item.theme !== prefs().theme) {
                 setPrefs({ theme: item.theme });
@@ -788,18 +828,22 @@ export function Launcher({ leaving, returnTo }) {
 
     return html`<div
         class=${`launcher-overlay ${leaving ? "leaving" : ""}`}
+        data-part="scrim"
+        data-for="launcher"
         inert=${leaving}
-        onMouseDown=${(event) => event.target === event.currentTarget && close()}
+        onMouseDown=${scrimPress(close)}
     >
         <section
             class="launcher"
+            data-part="launcher"
+            data-state=${leaving ? "closing" : undefined}
             role="dialog"
             aria-modal="true"
             aria-label="Launcher"
             onKeyDown=${onKey}
             onMouseDown=${(event) => event.target !== input.current && event.preventDefault()}
         >
-            <div class="launcher-input">
+            <div class="launcher-input" data-part="launcher-input">
                 <span class="prompt" aria-hidden="true">❯</span>
                 <input
                     ref=${input}
@@ -821,7 +865,12 @@ export function Launcher({ leaving, returnTo }) {
                     <${Icon} name="close" size=${18} />
                 </button>
             </div>
-            <div class="launcher-types" role="group" aria-label="Search type">
+            <div
+                class="launcher-types"
+                data-part="launcher-filters"
+                role="group"
+                aria-label="Search type"
+            >
                 ${[
                     ["", "All"],
                     ["@", "Sessions"],
@@ -843,7 +892,7 @@ export function Launcher({ leaving, returnTo }) {
                     role="group"
                     aria-label="Recent session options"
                 >
-                    <div class="launcher-group">
+                    <div class="launcher-group" data-part="launcher-group">
                         <span id="launcher-group-session">Recent sessions</span>
                         <span class="launcher-count">
                             ${recent.items.length} of ${recent.total}
@@ -866,7 +915,7 @@ export function Launcher({ leaving, returnTo }) {
                         <div role="group" aria-labelledby=${`launcher-group-${group.kind}`}>
                             ${
                                 !(group.kind === "session" && limitedRecent) &&
-                                html`<div class="launcher-group">
+                                html`<div class="launcher-group" data-part="launcher-group">
                                     <span id=${`launcher-group-${group.kind}`}>
                                         ${
                                             group.kind === "session" && recent
@@ -901,6 +950,7 @@ export function Launcher({ leaving, returnTo }) {
                                     key=${item.key}
                                     id=${optionId(item)}
                                     class=${`launcher-item ${on ? "on" : ""}`}
+                                    data-part="launcher-row"
                                     role="option"
                                     tabindex="-1"
                                     aria-label=${description}
@@ -975,7 +1025,9 @@ export function Launcher({ leaving, returnTo }) {
                                     }
                                     ${
                                         item.kind === "theme" &&
-                                        item.theme === prefs().theme &&
+                                        (item.look
+                                            ? item.look === prefs().look
+                                            : item.theme === prefs().theme) &&
                                         html`<span class="hint">current</span>`
                                     }
                                     ${

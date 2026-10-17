@@ -1,4 +1,4 @@
-// One refresh action and its persistent feedback, shared by the model picker, Providers, and the launcher.
+// One refresh action and its persistent feedback, shared by the menu, Providers, and the launcher.
 import { api, notify, store } from "./store.js";
 import { html, Icon } from "./ui.js";
 

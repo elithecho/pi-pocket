@@ -1,13 +1,16 @@
 /**
  * Sharing a drop-in: whether it stands on its own (its files are all its own, and it imports only what every Pi Pocket
  * has), and a draft of its index entry, from its doc comment and its files' hashes. Pi Pocket makes no GitHub calls for
- * it: the owner opens the pull request.
+ * it: the owner opens the pull request. A theme folder of the owner's is shared the same way (`shareThemeDraft`).
  */
 import { lstat, readdir, readFile } from "node:fs/promises";
 import { builtinModules } from "node:module";
 import { join, posix } from "node:path";
+import { describe } from "../errors.ts";
 import { POCKET_API } from "../extension-web.ts";
 import type { ExtensionInfo } from "../reload.ts";
+import { readTheme } from "../themes.ts";
+import { THEME_API } from "../themes/format.ts";
 import {
     type Declares,
     EntryError,
@@ -15,27 +18,40 @@ import {
     LIMITS,
     NAME,
     parseEntry,
+    parseThemeEntry,
     sha256,
 } from "./entry.ts";
 import { exists, textOf, type Written } from "./files.ts";
+import { readThemeFile } from "./themes.ts";
 
 /** The packages a browser module can import by name: the app's import map (`web/index.html`). */
 const BROWSER_PACKAGES = new Set(["preact", "preact/hooks", "htm", "marked", "dompurify"]);
 
 /**
- * What a file imports when it runs: `import … from`, `export … from`, `import "…"`, and `import("…")`, but not
- * `import type`, which is erased. Read from the text, so it can only be a first check: the index loads the module.
+ * What a file imports when it runs: `import … from`, `export … from`, `import "…"`, `import("…")`, and `require("…")`,
+ * but not `import type`, which is erased; each with whether only `require` names it (CommonJS finds a .js or .json file
+ * without its ending, and a folder's index). Read from the text, so it can only be a first check: the index loads the
+ * module.
  */
-function specifiers(source: string): Set<string> {
+function specifiers(source: string): Map<string, boolean> {
     // Comments first, so a `from "…"` in one is not read as an import.
     const code = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
     const found = (pattern: RegExp) => [...code.matchAll(pattern)].map((match) => match[2]!);
+    const specs = new Map<string, boolean>();
 
-    return new Set([
+    for (const spec of [
         ...found(/\b(?:import|export)\s+(?!type\s)[^;]*?\bfrom\s*(["'])([^"'\n]+)\1/g),
         ...found(/\bimport\s*\(\s*(["'])([^"'\n]+)\1\s*\)/g),
         ...found(/(?:^|[;\s])import\s*(["'])([^"'\n]+)\1/g),
-    ]);
+    ]) {
+        specs.set(spec, false);
+    }
+
+    for (const spec of found(/\brequire\s*\(\s*(["'])([^"'\n]+)\1\s*\)/g)) {
+        specs.set(spec, specs.get(spec) ?? true);
+    }
+
+    return specs;
 }
 
 /** A package's name from a specifier: `@scope/name` or `name`, without the path in it. */
@@ -58,17 +74,26 @@ export function importProblems(
     const names = new Set(files.map((file) => file.name));
 
     for (const file of files) {
-        if (file.text === undefined || !/\.(ts|js|mjs)$/.test(file.name)) {
+        if (file.text === undefined || !/\.[cm]?[jt]s$/i.test(file.name)) {
             continue;
         }
 
-        const browser = !file.name.endsWith(".ts");
+        // A browser module's files are .js and .mjs (`WEB_FILE_TYPES`); the rest is server code.
+        const browser = /\.m?js$/i.test(file.name);
 
-        for (const spec of specifiers(file.text)) {
+        for (const [spec, required] of specifiers(file.text)) {
             if (spec.startsWith("./") || spec.startsWith("../")) {
                 const target = posix.normalize(posix.join(posix.dirname(file.name), spec));
+                // What `require` would find too, as Node looks: the name with .js, .json, or .node, or a folder's index
+                // (only that, for a path that ends in a slash).
+                const ends = spec.endsWith("/")
+                    ? ["/index.js", "/index.json", "/index.node"]
+                    : ["", ".js", ".json", ".node", "/index.js", "/index.json", "/index.node"];
+                const found = required
+                    ? ends.some((end) => names.has(`${target.replace(/\/$/, "")}${end}`))
+                    : names.has(target);
 
-                if (!names.has(target)) {
+                if (!found) {
                     problems.push(
                         `${file.name} imports ${spec}, which is not one of its own files. Move it into ${name}/.`,
                     );
@@ -328,23 +353,128 @@ export async function shareDraft(options: {
         problems.push(`The index would refuse it: ${error.message}.`);
     }
 
-    const text = `${JSON.stringify(entry, null, 4)}\n`;
-
     return {
-        file,
         name,
         entry,
-        text,
         problems,
         notes,
         declaresKnown: loaded,
-        repoUrl,
-        contributingUrl: repoUrl === null ? null : `${repoUrl}/blob/HEAD/CONTRIBUTING.md`,
-        // GitHub's page for a new file in the index repository's main branch: the sheet adds the entry once the owner
-        // filled in where its files are (`value`, while it fits a link).
-        newEntryPage:
-            repoUrl === null
-                ? null
-                : `${repoUrl}/new/main/entries?filename=${encodeURIComponent(`${name}.json`)}`,
+        ...submitPages(repoUrl, name),
+    };
+}
+
+/**
+ * Where an entry is submitted, from the index's repository: its guide, and GitHub's page for a new file in its main
+ * branch, where the sheet adds the entry once the owner filled in where its files are (`value`, while it fits a link).
+ */
+const submitPages = (repoUrl: string | null, name: string) => ({
+    repoUrl,
+    contributingUrl: repoUrl === null ? null : `${repoUrl}/blob/HEAD/CONTRIBUTING.md`,
+    newEntryPage:
+        repoUrl === null
+            ? null
+            : `${repoUrl}/new/main/entries?filename=${encodeURIComponent(`${name}.json`)}`,
+});
+
+/**
+ * Whether one of the owner's theme folders passes the theme check, and a draft of its index entry (`kind: "theme"`):
+ * the files the theme loads, with their sizes and hashes, and its name and description from `theme.json`. Files it
+ * does not load are left out. In the same shape as a drop-in's draft, so the same sheet shows it.
+ */
+export async function shareThemeDraft(options: {
+    dir: string;
+    id: string;
+    owner: string;
+    repoUrl: string | null;
+    version: string;
+}) {
+    const { dir, id } = options;
+    const problems: string[] = [];
+    const notes: string[] = [];
+    let theme: ReturnType<typeof readTheme> | undefined;
+
+    try {
+        theme = readTheme(join(dir, id), id, false, options.version);
+    } catch (error) {
+        problems.push(`The theme check refuses it: ${describe(error)}.`);
+    }
+
+    // Its palettes by the files that are there: `colors-light.toml` alone is its palette too.
+    const palettes: string[] = [];
+
+    for (const path of ["colors.toml", "colors-light.toml"]) {
+        if (theme !== undefined && (await readThemeFile(dir, id, path)) !== undefined) {
+            palettes.push(path);
+        }
+    }
+
+    const paths =
+        theme === undefined
+            ? []
+            : [
+                  ...(theme.manifest === undefined ? [] : ["theme.json"]),
+                  ...palettes,
+                  ...theme.css.keys(),
+                  ...theme.assets.keys(),
+              ];
+    const files = [];
+
+    for (const path of paths) {
+        const bytes = await readThemeFile(dir, id, path);
+
+        if (bytes === undefined) {
+            problems.push(`${path} cannot be read: it is gone, or a link.`);
+            continue;
+        }
+
+        files.push({ name: `${id}/${path}`, sha256: sha256(bytes), size: bytes.byteLength });
+    }
+
+    notes.push("Only the files the theme loads are shared: others in its folder are left out.");
+
+    const manifest = theme?.manifest;
+    const description = manifest?.description ?? "";
+
+    if (theme !== undefined && description === "") {
+        problems.push("Give it a description in theme.json: one line that says how it looks.");
+    }
+
+    const entry = {
+        kind: "theme",
+        name: id,
+        title: manifest?.name ?? titleOf(id),
+        description,
+        tags: [],
+        author: { name: manifest?.author ?? options.owner },
+        version: manifest?.version ?? "1.0.0",
+        source: { repo: "your-github-name/your-repository", commit: "", path: "" },
+        files,
+        themeApi: THEME_API,
+        minPocket: options.version.replace(/[-+].*$/, ""),
+    };
+
+    if (theme !== undefined && description !== "") {
+        try {
+            parseThemeEntry({
+                ...entry,
+                author: { name: entry.author.name || "someone" },
+                source: { repo: "someone/something", commit: "0".repeat(40), path: "" },
+            });
+        } catch (error) {
+            if (!(error instanceof EntryError)) {
+                throw error;
+            }
+
+            problems.push(`The index would refuse it: ${error.message}.`);
+        }
+    }
+
+    return {
+        name: id,
+        entry,
+        problems,
+        notes,
+        declaresKnown: true,
+        ...submitPages(options.repoUrl, id),
     };
 }

@@ -908,6 +908,8 @@ export function BrowserPanel({ leaving = false }) {
 
     return html`<section
         class=${`browser window ${leaving ? "leaving" : ""}`}
+        data-part="browser-panel"
+        data-state=${leaving ? "closing" : undefined}
         role=${beside ? undefined : "dialog"}
         aria-modal=${beside ? undefined : "true"}
         aria-label="Browser"

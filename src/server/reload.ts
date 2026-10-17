@@ -10,6 +10,8 @@
  * commands) is kept by `ExtensionWebs` and goes in and out with its extensions.
  */
 import {
+    accessSync,
+    constants,
     existsSync,
     type FSWatcher,
     lstatSync,
@@ -18,8 +20,10 @@ import {
     readFileSync,
     realpathSync,
     rmSync,
+    statSync,
     symlinkSync,
     watch,
+    writeFileSync,
 } from "node:fs";
 import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -88,7 +92,7 @@ const TITLES: Record<string, string> = {
  */
 export const RESERVED_EXTENSIONS = /^(pocket-.*|coding-tools)$/;
 
-/** The tools of Pi Durable's coding tools and of the built-in modules. A test checks it against what they install. */
+/** The tools of Pi Durable's coding tools and of the built-in modules, kept in step with what they install by hand. */
 export const BUILT_IN_TOOLS: ReadonlySet<string> = new Set([
     "read",
     "write",
@@ -170,7 +174,87 @@ function moduleFiles(directory: string): string[] {
  */
 export function prepareDropInFolder(directory: string, appModules: string): void {
     mkdirSync(directory, { recursive: true });
-    const link = join(directory, "node_modules");
+    // A junction on Windows: no administrator rights needed.
+    keepLink(
+        join(directory, "node_modules"),
+        appModules,
+        process.platform === "win32" ? "junction" : "dir",
+    );
+}
+
+/** The first line of a copy of the types that Pi Pocket made where it cannot link: it refreshes only such a copy. */
+const TYPES_COPY =
+    "// A copy of Pi Pocket's types/pocket.d.ts: Pi Pocket refreshes it at each start. Edits here are lost.\n";
+
+/**
+ * Link `_pocket.d.ts` in the drop-in folder to Pi Pocket's public types (`types/pocket.d.ts`), so a drop-in imports them
+ * from beside it on any machine. Its leading `_` keeps it from loading as a module. A link that leads to a file that can
+ * be read stays as it is, wherever it leads (the owner's own checkout, say); a link to nowhere is made again. A file the
+ * owner made stays as it is. Where links cannot be made (Windows, or a file system that refuses them with `EPERM`), it
+ * is a copy instead, refreshed when the types change.
+ */
+export function linkTypes(directory: string, types: string): void {
+    const link = join(directory, "_pocket.d.ts");
+    let found: ReturnType<typeof lstatSync> | undefined;
+
+    try {
+        found = lstatSync(link);
+    } catch {
+        // Missing: made below.
+    }
+
+    if (found?.isSymbolicLink() === true) {
+        try {
+            accessSync(link, constants.R_OK);
+
+            if (statSync(link).isFile()) {
+                return;
+            }
+        } catch {
+            // A link to nowhere, or to something unreadable: made again below.
+        }
+
+        rmSync(link, { force: true });
+    } else if (found !== undefined) {
+        if (found.isFile() && readFileSync(link, "utf8").startsWith(TYPES_COPY)) {
+            copyTypes(link, types);
+        }
+
+        return;
+    }
+
+    if (process.platform !== "win32") {
+        try {
+            symlinkSync(types, link, "file");
+
+            return;
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "EPERM") {
+                throw error;
+            }
+        }
+    }
+
+    copyTypes(link, types);
+}
+
+/** Write a copy of the types at `link`, unless it is the same already. */
+function copyTypes(link: string, types: string): void {
+    const content = TYPES_COPY + readFileSync(types, "utf8");
+
+    try {
+        if (readFileSync(link, "utf8") === content) {
+            return;
+        }
+    } catch {
+        // Missing: written below.
+    }
+
+    writeFileSync(link, content);
+}
+
+/** Make `link` lead to `target`, unless it does already, or is a file or folder of its own. */
+function keepLink(link: string, target: string, type: "dir" | "file" | "junction"): void {
     let current: string | undefined;
 
     try {
@@ -183,13 +267,12 @@ export function prepareDropInFolder(directory: string, appModules: string): void
         // Missing, or a link to nowhere: made below.
     }
 
-    if (current === realpathSync(appModules)) {
+    if (current === realpathSync(target)) {
         return;
     }
 
     rmSync(link, { force: true });
-    // A junction on Windows: no administrator rights needed.
-    symlinkSync(appModules, link, process.platform === "win32" ? "junction" : "dir");
+    symlinkSync(target, link, type);
 }
 
 export class ExtensionLoader {
@@ -567,7 +650,10 @@ export class ExtensionLoader {
             this.#replace(extensions, this.#installed.get(file) ?? []);
             this.#installed.set(file, extensions);
             this.#errors.delete(file);
-            this.#webs.commit(part);
+            this.#webs.commit(
+                part,
+                extensions.flatMap((extension) => declared(extension).tools),
+            );
             committed = true;
 
             return extensions;
